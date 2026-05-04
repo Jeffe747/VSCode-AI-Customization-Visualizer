@@ -2494,6 +2494,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let graphPanX = 0;
 		let graphPanY = 0;
 		let graphShouldCenterOnNextRender = true;
+		let pendingSaveScrollState;
 		let toolFilterValue = '';
 		let toolFilterTimeout;
 		let resizeTimeout;
@@ -2723,6 +2724,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				setGraphLoading(false);
 				graphShouldCenterOnNextRender = true;
 				renderGraph(message.graph);
+				restorePendingSaveScrollState();
 			}
 
 			if (message.type === 'graph:error') {
@@ -3105,8 +3107,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		function getGraphViewportHeight() {
 			const bounds = graphElement.getBoundingClientRect();
 			const bottomPadding = 12;
+			const documentTop = bounds.top + window.scrollY;
 
-			return Math.max(320, Math.floor(window.innerHeight - bounds.top - bottomPadding));
+			return Math.max(320, Math.floor(window.innerHeight - documentTop - bottomPadding));
 		}
 
 		function getGraphViewBox(width, height) {
@@ -3881,6 +3884,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			setStatus('Saving ' + node.label + '...');
+			pendingSaveScrollState = captureEditorScrollState();
 			vscode.postMessage({
 				type: 'node:save',
 				nodeType: node.type,
@@ -3903,6 +3907,39 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				skillContext: document.getElementById('edit-skill-context')?.value,
 				hookCommands: JSON.stringify(getHookCommandEdits()),
 				body: bodyInput?.value,
+			});
+		}
+
+		function captureEditorScrollState() {
+			return {
+				windowX: window.scrollX,
+				windowY: window.scrollY,
+				documentX: document.documentElement.scrollLeft,
+				documentY: document.documentElement.scrollTop,
+				bodyX: document.body.scrollLeft,
+				bodyY: document.body.scrollTop,
+				editorX: editorElement.scrollLeft,
+				editorY: editorElement.scrollTop,
+			};
+		}
+
+		function restorePendingSaveScrollState() {
+			const scrollState = pendingSaveScrollState;
+
+			if (!scrollState) {
+				return;
+			}
+
+			pendingSaveScrollState = undefined;
+
+			requestAnimationFrame(() => {
+				document.documentElement.scrollLeft = scrollState.documentX;
+				document.documentElement.scrollTop = scrollState.documentY;
+				document.body.scrollLeft = scrollState.bodyX;
+				document.body.scrollTop = scrollState.bodyY;
+				editorElement.scrollLeft = scrollState.editorX;
+				editorElement.scrollTop = scrollState.editorY;
+				window.scrollTo(scrollState.windowX, scrollState.windowY);
 			});
 		}
 

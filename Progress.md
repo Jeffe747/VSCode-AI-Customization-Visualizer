@@ -2,6 +2,8 @@
 # Tasks
 
 # Done
+- Fixed the visualizer height calculation so saving while scrolled in the edit view no longer makes the graph grow larger.
+- Preserved the edit view scroll position when saving a node so the Save-button refresh no longer jumps to the top.
 - Removed hard graph panning borders so users can drag freely in every direction without view limits.
 - Center aligned the graph viewport on node bounds after graph refreshes, layout changes, and element-size changes.
 - Added VS Code Problems panel diagnostics for malformed customization files, missing agent/prompt/skill names, invalid skill metadata, and unresolved agent references.
