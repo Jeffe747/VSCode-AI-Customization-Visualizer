@@ -3,6 +3,8 @@
 
 
 # Done
+- Fixed remaining npm audit findings with patched transitive overrides and verified tests/package build.
+- Replaced deprecated vsce with @vscode/vsce after npm audit and confirmed production dependencies are clean.
 - Moved vsce to devDependencies and revalidated VSIX package contents.
 - Added official GitHub repository metadata and tightened VSIX package contents for best-practice publishing.
 - Updated .gitignore to allow package-lock.json to be tracked.
