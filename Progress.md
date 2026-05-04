@@ -1,8 +1,16 @@
 
 # Tasks
 
-
 # Done
+- Enforced mandatory label, agent, prompt, and send fields when saving from the direct handoff node editor.
+- Made embedded handoff label, agent, prompt, and send required when saving from the agent edit view, with model remaining optional.
+- Fixed agent edit view rendering by exposing placeholder constants inside the webview script.
+- Fixed handoff model saving so model stays nested inside the handoff frontmatter item.
+- Changed agent description and system prompt guidance to UI placeholders instead of saved file content.
+- Adjusted the VSIX package builder to output versioned packages into builds and kept local customization files out of the VSIX.
+- Adjusted side-by-side header spacing so the visualizer header aligns with the editor header.
+- Completed a performance pass by parallelizing workspace file discovery and caching chat model discovery during refreshes.
+- Added README links for repository and Marketplace publisher search from the author line.
 - Fixed remaining npm audit findings with patched transitive overrides and verified tests/package build.
 - Replaced deprecated vsce with @vscode/vsce after npm audit and confirmed production dependencies are clean.
 - Moved vsce to devDependencies and revalidated VSIX package contents.

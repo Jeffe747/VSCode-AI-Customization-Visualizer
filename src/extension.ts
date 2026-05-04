@@ -10,6 +10,8 @@ const instructionGlob = '**/{copilot-instructions.md,AGENTS.md,CLAUDE.md,Claude.
 const hookGlob = '**/{.github/hooks/*.json,.claude/settings.json,.claude/settings.local.json}';
 const mcpGlob = '**/.vscode/mcp.json';
 const excludeGlob = '**/{node_modules,out,dist,.git}/**';
+const agentDescriptionPlaceholder = 'Use when: describe when this agent should be selected.';
+const agentBodyPlaceholder = "Describe this agent's role, workflow, constraints, and output style.";
 
 export function activate(context: vscode.ExtensionContext) {
 	const scanner = new WorkspaceScanner();
@@ -46,10 +48,15 @@ function createGraphFileWatchers(provider: AgentVisualizerViewProvider): vscode.
 
 class WorkspaceScanner {
 	async scan(): Promise<WorkspaceAiFile[]> {
+		const [markdownUris, skillUris, instructionUris] = await Promise.all([
+			vscode.workspace.findFiles(markdownGlob, excludeGlob),
+			vscode.workspace.findFiles(skillGlob, excludeGlob),
+			vscode.workspace.findFiles(instructionGlob, excludeGlob),
+		]);
 		const uris = uniqueUris([
-			...await vscode.workspace.findFiles(markdownGlob, excludeGlob),
-			...await vscode.workspace.findFiles(skillGlob, excludeGlob),
-			...await vscode.workspace.findFiles(instructionGlob, excludeGlob),
+			...markdownUris,
+			...skillUris,
+			...instructionUris,
 		]);
 		const files = await Promise.all(uris.map(uri => this.readFile(uri)));
 
@@ -160,6 +167,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	private webviewView?: vscode.WebviewView;
 	private popoutPanel?: vscode.WebviewPanel;
 	private cachedGraph?: GraphJson;
+	private cachedBaseModels?: { expiresAt: number; models: AvailableModel[] };
 	private refreshTimer?: NodeJS.Timeout;
 
 	constructor(
@@ -356,13 +364,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	private async getAvailableModels(graph: GraphJson): Promise<AvailableModel[]> {
 		const models = new Map<string, AvailableModel>();
 
-		for (const model of await vscode.lm.selectChatModels()) {
-			const value = `${model.name} (${model.vendor})`;
-
-			models.set(value, {
-				label: value,
-				value,
-			});
+		for (const model of await this.getBaseAvailableModels()) {
+			models.set(model.value, model);
 		}
 
 		for (const node of graph.nodes) {
@@ -375,6 +378,30 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		return [...models.values()].sort((left, right) => left.label.localeCompare(right.label));
+	}
+
+	private async getBaseAvailableModels(): Promise<AvailableModel[]> {
+		const now = Date.now();
+
+		if (this.cachedBaseModels && this.cachedBaseModels.expiresAt > now) {
+			return this.cachedBaseModels.models;
+		}
+
+		const models = (await vscode.lm.selectChatModels()).map(model => {
+			const value = `${model.name} (${model.vendor})`;
+
+			return {
+				label: value,
+				value,
+			};
+		});
+
+		this.cachedBaseModels = {
+			expiresAt: now + 60_000,
+			models,
+		};
+
+		return models;
 	}
 
 	private async openNode(uriValue: unknown): Promise<void> {
@@ -442,7 +469,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const parsed = matter(rawMarkdown);
 		const frontmatter = normalizeFrontmatter(parsed.data);
 		const name = readString(message.name);
-		const body = typeof message.body === 'string' ? message.body : parsed.content;
+		const body = kind === 'agent' ? cleanAgentPlaceholderText(message.body, parsed.content) : typeof message.body === 'string' ? message.body : parsed.content;
 
 		if (name) {
 			frontmatter.name = name;
@@ -458,6 +485,19 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					await this.postError('Unable to save: selected handoff is missing its agent handoff index.');
 					return;
 				}
+
+					const handoffValidation = validateRequiredHandoffFields([{
+						label: message.name,
+						agent: message.agent,
+						prompt: message.prompt,
+						send: message.send,
+						model: message.handoffModel ?? message.model,
+					}]);
+
+					if (!handoffValidation.ok) {
+						await this.postSaveError(`Unable to save: handoff ${handoffValidation.index + 1} is missing ${handoffValidation.field}.`);
+						return;
+					}
 
 				const handoffs = updateHandoffAtIndex(readArray(frontmatter.handoffs), handoffIndex, message);
 
@@ -481,12 +521,19 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
+			const handoffValidation = validateRequiredHandoffFields(handoffs.value);
+
+			if (!handoffValidation.ok) {
+				await this.postSaveError(`Unable to save: handoff ${handoffValidation.index + 1} is missing ${handoffValidation.field}.`);
+				return;
+			}
+
 			const normalizedHandoffs = normalizePostedHandoffs(handoffs.value);
 
 			frontmatter.agents = parseLines(message.agents);
 			frontmatter.tools = parseLines(message.tools);
 			writeOptionalString(frontmatter, 'model', message.model);
-			writeOptionalString(frontmatter, 'description', message.description);
+			writeOptionalString(frontmatter, 'description', cleanAgentPlaceholderText(message.description));
 			writeOptionalString(frontmatter, 'argument-hint', message.argumentHint);
 			frontmatter['user-invocable'] = Boolean(message.userInvocable);
 			frontmatter['disable-model-invocation'] = Boolean(message.disableModelInvocation);
@@ -629,6 +676,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	private async postError(message: string): Promise<void> {
 		await this.postMessageToWebviews({
 			type: 'graph:error',
+			message,
+		});
+	}
+
+	private async postSaveError(message: string): Promise<void> {
+		await this.postMessageToWebviews({
+			type: 'save:error',
 			message,
 		});
 	}
@@ -1047,6 +1101,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.workspace-panels.side-by-side.has-editor .visualizer {
 			margin-bottom: 0;
+		}
+
+		.workspace-panels.side-by-side.has-editor .visualizer-header {
+			margin-top: 12px;
 		}
 
 		.workspace-panels.side-by-side.has-editor .editor {
@@ -1876,6 +1934,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				margin-bottom: 12px;
 			}
 
+			.workspace-panels.side-by-side.has-editor .visualizer-header {
+				margin-top: 0;
+			}
+
 			.workspace-panels.side-by-side.has-editor .editor {
 				margin-top: 12px;
 			}
@@ -1963,6 +2025,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	</div>
 	<script nonce="${nonce}">
 		const isWindowModeView = ${isWindowModeView ? 'true' : 'false'};
+		const agentDescriptionPlaceholder = ${JSON.stringify(agentDescriptionPlaceholder)};
+		const agentBodyPlaceholder = ${JSON.stringify(agentBodyPlaceholder)};
 		const vscode = acquireVsCodeApi();
 		const contentShell = document.getElementById('content-shell');
 		const workspacePanels = document.getElementById('workspace-panels');
@@ -2220,6 +2284,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				statusElement.textContent = message.message;
 				graphElement.innerHTML = '';
 				renderEditor(undefined);
+			}
+
+			if (message.type === 'save:error') {
+				setGraphLoading(false);
+				statusElement.textContent = message.message;
 			}
 
 			if (message.type === 'graph:loading') {
@@ -2734,7 +2803,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				'</div>' +
 			'</div>' +
 			'<div id="editor-body" class="editor-body">' +
-				(isEditable ? editableFields + (node.type === 'hook' || node.type === 'handoff' ? '' : '<label>' + renderFieldLabel(node.type === 'skill' ? 'Instructions' : 'System Prompt', node.type === 'agent' ? fieldHelp.agentBody : node.type === 'prompt' ? fieldHelp.promptBody : node.type === 'skill' ? fieldHelp.skillBody : fieldHelp.instructionBody) + '<textarea id="edit-body" class="body-field">' + escapeHtml(node.body || '') + '</textarea></label>') : '<p class="editor-note">' + escapeHtml(readOnlyNote) + '</p>' + readOnlyDetails) +
+				(isEditable ? editableFields + (node.type === 'hook' || node.type === 'handoff' ? '' : '<label>' + renderFieldLabel(node.type === 'skill' ? 'Instructions' : 'System Prompt', node.type === 'agent' ? fieldHelp.agentBody : node.type === 'prompt' ? fieldHelp.promptBody : node.type === 'skill' ? fieldHelp.skillBody : fieldHelp.instructionBody) + '<textarea id="edit-body" class="body-field"' + renderBodyPlaceholderAttribute(node.type) + '>' + escapeHtml(node.body || '') + '</textarea></label>') : '<p class="editor-note">' + escapeHtml(readOnlyNote) + '</p>' + readOnlyDetails) +
 			'</div>';
 
 			const openButton = document.getElementById('open-node');
@@ -2982,6 +3051,19 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
+			const editedHandoffs = node.type === 'agent' ? getEditedHandoffs() : [];
+			const handoffValidation = node.type === 'agent'
+				? validateEditedHandoffs(editedHandoffs)
+				: node.type === 'handoff'
+					? validateDirectHandoffEditor()
+					: { ok: true };
+
+			if (!handoffValidation.ok) {
+				statusElement.textContent = 'Unable to save: handoff ' + (handoffValidation.index + 1) + ' is missing ' + handoffValidation.field + '.';
+				handoffValidation.element?.focus();
+				return;
+			}
+
 			statusElement.textContent = 'Saving ' + node.label + '...';
 			vscode.postMessage({
 				type: 'node:save',
@@ -2992,6 +3074,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				agents: getCheckedAgents(),
 				tools: unique([...getCheckedTools(), ...(node.type === 'agent' ? (node.tools || []).filter(isMcpServerToolReference) : [])]),
 				model: document.getElementById('edit-model')?.value,
+				handoffModel: node.type === 'handoff' ? document.getElementById('edit-model')?.value : undefined,
 				userInvocable: document.getElementById('edit-user-invocable')?.checked,
 				agent: document.getElementById('edit-agent')?.value,
 				prompt: document.getElementById('edit-prompt')?.value,
@@ -2999,7 +3082,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				description: document.getElementById('edit-description')?.value,
 				applyTo: document.getElementById('edit-apply-to')?.value,
 				argumentHint: document.getElementById('edit-argument-hint')?.value,
-				handoffs: node.type === 'agent' ? JSON.stringify(getEditedHandoffs()) : undefined,
+				handoffs: node.type === 'agent' ? JSON.stringify(editedHandoffs.map(item => item.handoff)) : undefined,
 				disableModelInvocation: document.getElementById('edit-disable-model-invocation')?.checked,
 				skillContext: document.getElementById('edit-skill-context')?.value,
 				hookCommands: JSON.stringify(getHookCommandEdits()),
@@ -3032,10 +3115,14 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderAgentFields(node) {
-			return '<label>' + renderFieldLabel('Description', fieldHelp.agentDescription) + '<textarea id="edit-description" class="compact-field">' + escapeHtml(node.description || '') + '</textarea></label>' +
+			return '<label>' + renderFieldLabel('Description', fieldHelp.agentDescription) + '<textarea id="edit-description" class="compact-field" placeholder="' + escapeAttribute(agentDescriptionPlaceholder) + '">' + escapeHtml(node.description || '') + '</textarea></label>' +
 				'<label>' + renderFieldLabel('Argument hint', fieldHelp.agentArgumentHint) + '<input id="edit-argument-hint" type="text" value="' + escapeAttribute(node.argumentHint || '') + '"></label>' +
 				'<label class="checkbox-label"><input id="edit-disable-model-invocation" type="checkbox" ' + (node.disableModelInvocation ? 'checked' : '') + '>' + renderFieldLabel('Disable Model Invocation', fieldHelp.agentDisableModelInvocation) + '</label>' +
 				renderAgentHandoffEditor(node.handoffs || []);
+		}
+
+		function renderBodyPlaceholderAttribute(nodeType) {
+			return nodeType === 'agent' ? ' placeholder="' + escapeAttribute(agentBodyPlaceholder) + '"' : '';
 		}
 
 		function renderAgentHandoffEditor(handoffs) {
@@ -3085,15 +3172,16 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		function getEditedHandoffs() {
 			return [...editorElement.querySelectorAll('#handoff-list .handoff-item')].map(item => {
-				const label = item.querySelector('.edit-handoff-label')?.value.trim() || '';
-				const agent = item.querySelector('.edit-handoff-agent')?.value || '';
-				const prompt = item.querySelector('.edit-handoff-prompt')?.value || '';
-				const send = Boolean(item.querySelector('.edit-handoff-send')?.checked);
-				const model = item.querySelector('.edit-handoff-model')?.value || '';
-
-				if (!label && !agent && !prompt && !model) {
-					return undefined;
-				}
+				const labelInput = item.querySelector('.edit-handoff-label');
+				const agentInput = item.querySelector('.edit-handoff-agent');
+				const promptInput = item.querySelector('.edit-handoff-prompt');
+				const sendInput = item.querySelector('.edit-handoff-send');
+				const modelInput = item.querySelector('.edit-handoff-model');
+				const label = labelInput?.value.trim() || '';
+				const agent = agentInput?.value || '';
+				const prompt = promptInput?.value.trim() || '';
+				const send = Boolean(sendInput?.checked);
+				const model = modelInput?.value || '';
 
 				const handoff = {
 					label,
@@ -3106,8 +3194,63 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					handoff.model = model;
 				}
 
-				return handoff;
-			}).filter(Boolean);
+				return {
+					handoff,
+					inputs: {
+						label: labelInput,
+						agent: agentInput,
+						prompt: promptInput,
+						send: sendInput,
+					},
+				};
+			});
+		}
+
+		function validateEditedHandoffs(items) {
+			for (const [index, item] of items.entries()) {
+				if (!item.handoff.label) {
+					return { ok: false, index, field: 'label', element: item.inputs.label };
+				}
+
+				if (!item.handoff.agent) {
+					return { ok: false, index, field: 'agent', element: item.inputs.agent };
+				}
+
+				if (!item.handoff.prompt) {
+					return { ok: false, index, field: 'prompt', element: item.inputs.prompt };
+				}
+
+				if (!item.inputs.send) {
+					return { ok: false, index, field: 'send', element: item.inputs.send };
+				}
+			}
+
+			return { ok: true };
+		}
+
+		function validateDirectHandoffEditor() {
+			const labelInput = document.getElementById('edit-name');
+			const agentInput = document.getElementById('edit-agent');
+			const promptInput = document.getElementById('edit-prompt');
+			const sendInput = document.getElementById('edit-send');
+
+			if (!labelInput?.value.trim()) {
+				return { ok: false, index: 0, field: 'label', element: labelInput };
+			}
+
+			if (!agentInput?.value) {
+				return { ok: false, index: 0, field: 'agent', element: agentInput };
+			}
+
+			if (!promptInput?.value.trim()) {
+				return { ok: false, index: 0, field: 'prompt', element: promptInput };
+			}
+
+			if (!sendInput) {
+				return { ok: false, index: 0, field: 'send', element: sendInput };
+			}
+
+			return { ok: true };
 		}
 
 		function getHandoffDescription(handoff) {
@@ -3474,6 +3617,34 @@ function parseHandoffsInput(value: unknown): { ok: true; value: unknown[] } | { 
 	return { ok: false };
 }
 
+export function validateRequiredHandoffFields(handoffs: unknown[]): { ok: true } | { ok: false; index: number; field: 'label' | 'agent' | 'prompt' | 'send' } {
+	for (const [index, handoff] of handoffs.entries()) {
+		const record = normalizeObject(handoff);
+		const label = readString(record.label) || readString(record.name);
+		const agent = readString(record.agent) || readString(record.handoffAgent);
+		const prompt = readString(record.prompt) || readString(record.handoffPrompt);
+		const hasSend = typeof record.send === 'boolean' || typeof record.handoffSend === 'boolean';
+
+		if (!label) {
+			return { ok: false, index, field: 'label' };
+		}
+
+		if (!agent) {
+			return { ok: false, index, field: 'agent' };
+		}
+
+		if (!prompt) {
+			return { ok: false, index, field: 'prompt' };
+		}
+
+		if (!hasSend) {
+			return { ok: false, index, field: 'send' };
+		}
+	}
+
+	return { ok: true };
+}
+
 function normalizePostedHandoffs(handoffs: unknown[]): unknown[] {
 	return handoffs.map(handoff => {
 		const record = normalizeObject(handoff);
@@ -3521,7 +3692,7 @@ function updateHandoffAtIndex(handoffs: unknown[], index: number, message: Recor
 	writeOptionalString(updated, 'label', message.name);
 	writeOptionalString(updated, 'agent', message.agent);
 	writeOptionalString(updated, 'prompt', message.prompt);
-	writeOptionalString(updated, 'model', message.model);
+	writeOptionalString(updated, 'model', message.handoffModel ?? message.model);
 	nextHandoffs[index] = updated;
 
 	return normalizePostedHandoffs(nextHandoffs);
@@ -3849,14 +4020,15 @@ export function createCustomizationMarkdown(kind: MarkdownCustomizationKind, dis
 	const skillName = getSkillFolderName(displayName);
 	const frontmatter: Record<string, unknown> = {
 		name: kind === 'skill' ? skillName : displayName.trim(),
-		description: kind === 'agent'
-			? 'Use when: describe when this agent should be selected.'
-			: kind === 'prompt'
+	};
+
+	if (kind !== 'agent') {
+		frontmatter.description = kind === 'prompt'
 				? 'Use when: describe when this prompt should be run.'
 				: kind === 'skill'
 					? 'Use when: describe what reusable capability this skill provides and when Copilot should load it.'
-					: 'Use when: describe which files or tasks these instructions apply to.',
-	};
+					: 'Use when: describe which files or tasks these instructions apply to.';
+	}
 
 	if (kind === 'agent') {
 		frontmatter.tools = [];
@@ -3873,7 +4045,7 @@ export function createCustomizationMarkdown(kind: MarkdownCustomizationKind, dis
 
 	const heading = displayName.trim();
 	const body = kind === 'agent'
-		? `# ${heading}\n\nDescribe this agent's role, workflow, constraints, and output style.\n`
+		? ''
 		: kind === 'prompt'
 			? `# ${heading}\n\nDescribe the task this prompt should run, including expected inputs and output format.\n`
 			: kind === 'skill'
@@ -3881,6 +4053,26 @@ export function createCustomizationMarkdown(kind: MarkdownCustomizationKind, dis
 				: `# ${heading}\n\nDescribe the coding guidelines, project rules, and conventions that should influence AI assistance.\n`;
 
 	return matter.stringify(body, frontmatter);
+}
+
+function cleanAgentPlaceholderText(value: unknown, fallback = ''): string {
+	if (typeof value !== 'string') {
+		return fallback;
+	}
+
+	const trimmedValue = value.trim();
+
+	if (trimmedValue === agentDescriptionPlaceholder || trimmedValue === agentBodyPlaceholder || trimmedValue === `# ${readFirstMarkdownHeading(value)}\n\n${agentBodyPlaceholder}`.trim()) {
+		return '';
+	}
+
+	return value;
+}
+
+function readFirstMarkdownHeading(value: string): string {
+	const heading = value.split(/\r?\n/, 1)[0] || '';
+
+	return heading.startsWith('# ') ? heading.slice(2).trim() : '';
 }
 
 export function createHookCustomizationJson(displayName: string): string {

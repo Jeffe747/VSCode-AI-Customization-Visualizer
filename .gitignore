@@ -5,6 +5,7 @@
 out/
 dist/
 bin/
+builds/
 
 # --- Extension Package ---
 # The installer file you'll send to colleagues

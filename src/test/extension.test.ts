@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import matter = require('gray-matter');
 import * as vscode from 'vscode';
-import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, stringifyCustomizationMarkdown } from '../extension';
+import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, stringifyCustomizationMarkdown, validateRequiredHandoffFields } from '../extension';
 import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 
 suite('Extension Test Suite', () => {
@@ -328,7 +328,8 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(agent.data['user-invocable'], true);
 		assert.deepStrictEqual(agent.data.tools, []);
 		assert.deepStrictEqual(agent.data.agents, []);
-		assert.ok(agent.content.includes("Describe this agent's role"));
+		assert.strictEqual(agent.data.description, undefined);
+		assert.strictEqual(agent.content.trim(), '');
 
 		assert.strictEqual(prompt.data.name, 'Review Prompt');
 		assert.strictEqual(prompt.data.agent, 'agent');
@@ -376,6 +377,33 @@ suite('Extension Test Suite', () => {
 		assert.match(markdown, /^tools: \[search,custom-tool\]$/m);
 		assert.doesNotMatch(markdown, /^tools:\n\s+- /m);
 		assert.deepStrictEqual(matter(markdown).data.tools, ['search', 'custom-tool']);
+	});
+
+	test('saves handoff model inside handoff frontmatter item', () => {
+		const markdown = stringifyCustomizationMarkdown('Agent body.', {
+			name: 'Worker',
+			handoffs: [
+				{
+					send: false,
+					label: 'Proceed',
+					agent: 'agent',
+					prompt: 'Proceed',
+					model: 'Auto (copilot)',
+				},
+			],
+		});
+
+		assert.match(markdown, /^\s+model: Auto \(copilot\)$/m);
+		assert.doesNotMatch(markdown, /^model: Auto \(copilot\)$/m);
+		assert.strictEqual(matter(markdown).data.handoffs[0].model, 'Auto (copilot)');
+	});
+
+	test('requires handoff fields except model before saving', () => {
+		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', agent: 'agent', prompt: 'Proceed', send: false }]), { ok: true });
+		assert.deepStrictEqual(validateRequiredHandoffFields([{ agent: 'agent', prompt: 'Proceed', send: false, model: 'Auto (copilot)' }]), { ok: false, index: 0, field: 'label' });
+		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', prompt: 'Proceed', send: false }]), { ok: false, index: 0, field: 'agent' });
+		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', agent: 'agent', send: false }]), { ok: false, index: 0, field: 'prompt' });
+		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', agent: 'agent', prompt: 'Proceed' }]), { ok: false, index: 0, field: 'send' });
 	});
 });
 
