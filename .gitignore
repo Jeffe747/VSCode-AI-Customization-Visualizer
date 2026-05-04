@@ -1,0 +1,28 @@
+
+# VSCode Extension
+# --- Build & Compiled Output ---
+# This is where esbuild will put your executable code
+out/
+dist/
+bin/
+
+# --- Extension Package ---
+# The installer file you'll send to colleagues
+*.vsix
+
+# --- Dependencies ---
+node_modules/
+
+# --- TypeScript & IDE ---
+*.tsbuildinfo
+.vscode-test/
+.history/
+
+# --- Logs & Temp ---
+*.log
+npm-debug.log*
+.eslintcache
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
