@@ -2,6 +2,7 @@
 # Tasks
 
 # Done
+- Removed hard graph panning borders so users can drag freely in every direction without view limits.
 - Center aligned the graph viewport on node bounds after graph refreshes, layout changes, and element-size changes.
 - Added VS Code Problems panel diagnostics for malformed customization files, missing agent/prompt/skill names, invalid skill metadata, and unresolved agent references.
 - Added a graph layout dropdown with Hierarchical, Radial, and Force-directed layout algorithms for larger AI workspaces.
