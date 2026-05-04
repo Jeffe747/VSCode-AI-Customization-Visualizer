@@ -2,7 +2,7 @@
   "name": "aivisualizer",
   "displayName": "Copilot AI Customization Visualizer",
   "description": "Visualize and edit Copilot AI customization files.",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "author": {
     "name": "Jeppe Andreas Jakobsen",
     "url": "https://github.com/Jeffe747"

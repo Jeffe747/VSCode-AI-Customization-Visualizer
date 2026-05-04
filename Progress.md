@@ -2,6 +2,20 @@
 # Tasks
 
 # Done
+- Moved the visualizer node and edge count to the bottom-left corner with smaller text.
+- Split the Layout settings container into aligned Toggles and Sizing subsections.
+- Hid the Token heatmap and Identify orphans graph toggles by default and added settings checkboxes to show them when needed.
+- Fixed the Token heatmap '%' marker alignment by grouping each threshold input with its unit.
+- Adjusted the Token heatmap settings to accept a default baseline AI model for default calculations.
+- Aligned the percentage '%' marker next to the Token heatmap threshold input fields.
+- Derived token heatmap max from the selected model's max input tokens when available, falling back only when no model capacity is known.
+- Moved heatmap threshold controls into their own settings container and changed them from sliders to numeric percentage input fields.
+- Moved heatmap thresholds into shared settings so activity view and window mode use the same orange/red token heatmap thresholds.
+- Made color picker settings shared between activity view and window mode.
+- Changed graph profiling controls into checkbox-style toggles.
+- Changed token heatmap visualization from node color replacement to adjustable background glow intensity behind agent nodes.
+- Added visualizer toggles for token heatmap profiling and orphan detection, with state persisted in the webview.
+- Added token heatmap coloring for agent context estimates and orphan highlighting for disconnected editable prompts, hidden agents, and hidden skills.
 - Added agent, skill, and cogwheel glyphs to the three nodes in resources/agent-graph-icon.png.
 - Added the extension icon to README.md under an Extension Icon header.
 - Fixed the visualizer height calculation so saving while scrolled in the edit view no longer makes the graph grow larger.

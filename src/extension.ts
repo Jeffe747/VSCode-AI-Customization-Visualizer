@@ -27,6 +27,11 @@ interface VisualizerSettings {
 	nodeScale: number;
 	textScale: number;
 	colors: Partial<Record<VisualizerColorKey, string>>;
+	heatmapToggleVisible: boolean;
+	orphanToggleVisible: boolean;
+	heatmapMediumThreshold: number;
+	heatmapHighThreshold: number;
+	heatmapBaselineModel?: string;
 }
 
 interface ReadProblem {
@@ -95,12 +100,19 @@ const defaultVisualizerSettings: VisualizerSettings = {
 	nodeScale: 1.1,
 	textScale: 1,
 	colors: {},
+	heatmapToggleVisible: false,
+	orphanToggleVisible: false,
+	heatmapMediumThreshold: 0.38,
+	heatmapHighThreshold: 0.72,
+	heatmapBaselineModel: undefined,
 };
 
 const visualizerSettingsStorageKeys: Record<VisualizerSettingsMode, string> = {
 	activity: 'aivisualizer.settings.activityBar',
 	window: 'aivisualizer.settings.windowMode',
 };
+
+const sharedVisualizerSettingsStorageKey = 'aivisualizer.settings.shared';
 
 export const toolChoiceHiddenCssRule = `.tool-choice-list .choice-check[hidden] {
 			display: none;
@@ -114,6 +126,8 @@ export function isToolChoiceVisibleForFilter(toolName: string, filterValue: stri
 
 function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
 	const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+	const heatmapHighThreshold = readNumberInRange(record.heatmapHighThreshold, 0.02, 0.99, defaultVisualizerSettings.heatmapHighThreshold);
+	const heatmapMediumThreshold = readNumberInRange(record.heatmapMediumThreshold, 0.01, heatmapHighThreshold - 0.01, Math.min(defaultVisualizerSettings.heatmapMediumThreshold, heatmapHighThreshold - 0.01));
 
 	return {
 		sideBySideLayout: typeof record.sideBySideLayout === 'boolean' ? record.sideBySideLayout : defaultVisualizerSettings.sideBySideLayout,
@@ -121,7 +135,16 @@ function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
 		nodeScale: readNumberInRange(record.nodeScale, 0.85, 2, defaultVisualizerSettings.nodeScale),
 		textScale: readNumberInRange(record.textScale, 0.75, 1.6, defaultVisualizerSettings.textScale),
 		colors: normalizeVisualizerColors(record.colors),
+		heatmapToggleVisible: typeof record.heatmapToggleVisible === 'boolean' ? record.heatmapToggleVisible : defaultVisualizerSettings.heatmapToggleVisible,
+		orphanToggleVisible: typeof record.orphanToggleVisible === 'boolean' ? record.orphanToggleVisible : defaultVisualizerSettings.orphanToggleVisible,
+		heatmapMediumThreshold,
+		heatmapHighThreshold,
+		heatmapBaselineModel: readString(record.heatmapBaselineModel),
 	};
+}
+
+function hasVisualizerColors(colors: Partial<Record<VisualizerColorKey, string>>): boolean {
+	return visualizerColorDefinitions.some(definition => typeof colors[definition.key] === 'string');
 }
 
 function normalizeVisualizerColors(value: unknown): Partial<Record<VisualizerColorKey, string>> {
@@ -457,14 +480,46 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private getVisualizerSettings(mode: VisualizerSettingsMode): VisualizerSettings {
-		return normalizeVisualizerSettings(this.context.workspaceState.get(visualizerSettingsStorageKeys[mode]));
+		const modeSettings = normalizeVisualizerSettings(this.context.workspaceState.get(visualizerSettingsStorageKeys[mode]));
+		const sharedSettings = normalizeVisualizerSettings(this.context.workspaceState.get(sharedVisualizerSettingsStorageKey));
+
+		return {
+			...modeSettings,
+			colors: hasVisualizerColors(sharedSettings.colors) ? sharedSettings.colors : modeSettings.colors,
+			heatmapToggleVisible: sharedSettings.heatmapToggleVisible,
+			orphanToggleVisible: modeSettings.orphanToggleVisible,
+			heatmapMediumThreshold: sharedSettings.heatmapMediumThreshold,
+			heatmapHighThreshold: sharedSettings.heatmapHighThreshold,
+			heatmapBaselineModel: sharedSettings.heatmapBaselineModel,
+		};
 	}
 
 	private async saveVisualizerSettings(message: Record<string, unknown>): Promise<void> {
 		const mode = message.mode === 'window' ? 'window' : 'activity';
 		const settings = normalizeVisualizerSettings(message.settings);
+		const existingModeSettings = normalizeVisualizerSettings(this.context.workspaceState.get(visualizerSettingsStorageKeys[mode]));
+		const existingSharedSettings = normalizeVisualizerSettings(this.context.workspaceState.get(sharedVisualizerSettingsStorageKey));
+		const modeSettings: VisualizerSettings = {
+			...existingModeSettings,
+			sideBySideLayout: settings.sideBySideLayout,
+			documentationLinksHidden: settings.documentationLinksHidden,
+			nodeScale: settings.nodeScale,
+			textScale: settings.textScale,
+			orphanToggleVisible: settings.orphanToggleVisible,
+		};
+		const sharedSettings: VisualizerSettings = {
+			...existingSharedSettings,
+			colors: settings.colors,
+			heatmapToggleVisible: settings.heatmapToggleVisible,
+			heatmapMediumThreshold: settings.heatmapMediumThreshold,
+			heatmapHighThreshold: settings.heatmapHighThreshold,
+			heatmapBaselineModel: settings.heatmapBaselineModel,
+		};
 
-		await this.context.workspaceState.update(visualizerSettingsStorageKeys[mode], settings);
+		await Promise.all([
+			this.context.workspaceState.update(visualizerSettingsStorageKeys[mode], modeSettings),
+			this.context.workspaceState.update(sharedVisualizerSettingsStorageKey, sharedSettings),
+		]);
 	}
 
 	refresh(): void {
@@ -664,6 +719,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			return {
 				label: value,
 				value,
+				maxInputTokens: model.maxInputTokens,
 			};
 		});
 
@@ -1163,8 +1219,15 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		.status {
+			position: absolute;
+			left: 8px;
+			bottom: 6px;
+			z-index: 1;
 			margin: 0;
 			color: var(--vscode-descriptionForeground);
+			font-size: 10px;
+			line-height: 1;
+			pointer-events: none;
 			white-space: nowrap;
 		}
 
@@ -1185,6 +1248,19 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.size-control input {
 			width: 100%;
+		}
+
+		.threshold-control input[type="number"] {
+			box-sizing: border-box;
+			width: 70px;
+			margin: 0;
+			border: 1px solid var(--vscode-input-border, var(--panel-border));
+			border-radius: 3px;
+			padding: 5px 6px;
+			color: var(--vscode-input-foreground);
+			background: var(--vscode-input-background);
+			font: inherit;
+			font-variant-numeric: tabular-nums;
 		}
 
 		.size-value {
@@ -1266,6 +1342,36 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			color: var(--vscode-descriptionForeground);
 			font-size: 11px;
 			pointer-events: auto;
+		}
+
+		.graph-toggle {
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			border: 1px solid var(--panel-border);
+			border-radius: 4px;
+			padding: 2px 6px;
+			color: var(--vscode-sideBar-foreground);
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 94%, var(--vscode-sideBar-foreground));
+			font: inherit;
+			font-size: 11px;
+			pointer-events: auto;
+			cursor: pointer;
+		}
+
+		.graph-toggle:has(input:checked) {
+			border-color: var(--selection);
+			background: color-mix(in srgb, var(--vscode-button-background) 28%, var(--vscode-sideBar-background));
+		}
+
+		.graph-toggle input {
+			width: auto;
+			margin: 0;
+		}
+
+		.graph-toggle:hover {
+			border-color: var(--selection);
+			background: color-mix(in srgb, var(--vscode-button-hoverBackground) 22%, var(--vscode-sideBar-background));
 		}
 
 		.layout-control select {
@@ -1713,10 +1819,109 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			gap: 8px 12px;
 		}
 
+		.settings-subsection {
+			display: grid;
+			gap: 8px;
+			border: 1px solid var(--panel-border);
+			border-radius: 5px;
+			padding: 8px;
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 98%, var(--vscode-sideBar-foreground));
+		}
+
+		.settings-subsection-title {
+			margin: 0;
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+			font-weight: 600;
+		}
+
+		.settings-checkbox-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+			align-items: center;
+			gap: 8px 12px;
+		}
+
+		.settings-slider-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+			align-items: center;
+			gap: 8px 12px;
+		}
+
+		.threshold-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+			gap: 8px;
+		}
+
+		.heatmap-model-control {
+			display: grid;
+			gap: 4px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+		}
+
+		.heatmap-model-control select {
+			box-sizing: border-box;
+			width: 100%;
+			border: 1px solid var(--vscode-input-border, var(--panel-border));
+			border-radius: 3px;
+			padding: 5px 6px;
+			color: var(--vscode-input-foreground);
+			background: var(--vscode-input-background);
+			font: inherit;
+		}
+
 		.settings-dialog .size-control,
-		.settings-dialog .settings-toggle {
+		.settings-dialog .settings-toggle,
+		.settings-dialog .threshold-control,
+		.settings-dialog .heatmap-model-control {
 			width: 100%;
 			margin: 0;
+		}
+
+		.threshold-control {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto;
+			align-items: center;
+			gap: 6px;
+			border: 1px solid var(--panel-border);
+			border-radius: 5px;
+			padding: 7px 8px;
+			color: var(--vscode-descriptionForeground);
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 98%, var(--vscode-sideBar-foreground));
+			font-size: 11px;
+		}
+
+		.threshold-control strong,
+		.threshold-control small {
+			display: block;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.threshold-control strong {
+			color: var(--vscode-sideBar-foreground);
+			font-weight: 600;
+		}
+
+		.threshold-input-wrap {
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			justify-self: end;
+		}
+
+		.threshold-unit {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 12px;
+			color: var(--vscode-descriptionForeground);
+			font-variant-numeric: tabular-nums;
+			line-height: 1;
 		}
 
 		.color-grid {
@@ -2351,6 +2556,40 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			stroke-dasharray: 3 2;
 		}
 
+		.node.orphan .node-shape {
+			stroke: var(--vscode-charts-yellow, #f2c744);
+			stroke-width: 2.4px;
+			stroke-dasharray: 2 2;
+		}
+
+		.node.heatmap .node-shape {
+			stroke: var(--edge);
+			stroke-width: 1.4px;
+		}
+
+		.heatmap-glow {
+			pointer-events: none;
+			stroke: none;
+		}
+
+		.heatmap-low {
+			fill: #4aa36b;
+			opacity: 0.24;
+			filter: drop-shadow(0 0 4px #4aa36b);
+		}
+
+		.heatmap-medium {
+			fill: #d88a4f;
+			opacity: 0.34;
+			filter: drop-shadow(0 0 7px #d88a4f);
+		}
+
+		.heatmap-high {
+			fill: #d84f4f;
+			opacity: 0.46;
+			filter: drop-shadow(0 0 11px #d84f4f);
+		}
+
 		@media (max-width: 420px) {
 			.field-row {
 				grid-template-columns: 1fr;
@@ -2400,11 +2639,29 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			<h3>${isWindowModeView ? 'Window-mode Extension Settings' : 'Extension Settings'}</h3>
 			<section class="settings-section" aria-label="Layout settings">
 				<h4>Layout</h4>
-				<div class="settings-grid">
-					<label class="settings-toggle"><input id="side-by-side-layout" type="checkbox"><span>Side-by-side layout</span></label>
-					<label class="settings-toggle"><input id="hide-documentation-links" type="checkbox"><span>Hide documentation links</span></label>
-					<label class="size-control" for="node-size"><span>Element size</span><input id="node-size" type="range" min="0.85" max="2" step="0.05" value="1.1"><span id="node-size-value" class="size-value">110%</span></label>
-					<label class="size-control" for="text-size"><span>Editor text</span><input id="text-size" type="range" min="0.75" max="1.6" step="0.05" value="1"><span id="text-size-value" class="size-value">100%</span></label>
+				<div class="settings-subsection" aria-label="Layout toggles">
+					<div class="settings-subsection-title">Toggles</div>
+					<div class="settings-checkbox-grid">
+						<label class="settings-toggle"><input id="side-by-side-layout" type="checkbox"><span>Side-by-side layout</span></label>
+						<label class="settings-toggle"><input id="hide-documentation-links" type="checkbox"><span>Hide documentation links</span></label>
+						<label class="settings-toggle"><input id="show-orphan-toggle" type="checkbox"><span>Show orphan toggle</span></label>
+					</div>
+				</div>
+				<div class="settings-subsection" aria-label="Layout sizing">
+					<div class="settings-subsection-title">Sizing</div>
+					<div class="settings-slider-grid">
+						<label class="size-control" for="node-size"><span>Element size</span><input id="node-size" type="range" min="0.85" max="2" step="0.05" value="1.1"><span id="node-size-value" class="size-value">110%</span></label>
+						<label class="size-control" for="text-size"><span>Editor text</span><input id="text-size" type="range" min="0.75" max="1.6" step="0.05" value="1"><span id="text-size-value" class="size-value">100%</span></label>
+					</div>
+				</div>
+			</section>
+			<section class="settings-section" aria-label="Token heatmap settings">
+				<h4>Token heatmap</h4>
+				<label class="settings-toggle"><input id="show-token-heatmap-toggle" type="checkbox"><span>Show visualizer toggle</span></label>
+				<label class="heatmap-model-control" for="heatmap-baseline-model"><span>Default baseline model</span><select id="heatmap-baseline-model"><option value="">Use graph-relative fallback</option></select></label>
+				<div class="threshold-grid">
+					<label class="threshold-control" for="heatmap-medium-threshold"><span><strong>Orange threshold</strong><small>Percent of baseline context</small></span><span class="threshold-input-wrap"><input id="heatmap-medium-threshold" type="number" min="1" max="98" step="1" value="38" inputmode="numeric"><span class="threshold-unit" aria-hidden="true">%</span></span></label>
+					<label class="threshold-control" for="heatmap-high-threshold"><span><strong>Red threshold</strong><small>Percent of baseline context</small></span><span class="threshold-input-wrap"><input id="heatmap-high-threshold" type="number" min="2" max="99" step="1" value="72" inputmode="numeric"><span class="threshold-unit" aria-hidden="true">%</span></span></label>
 				</div>
 			</section>
 			<section class="settings-section" aria-label="Visualizer colors">
@@ -2441,7 +2698,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		<div id="workspace-panels" class="workspace-panels">
 			<section class="visualizer" aria-label="Graph visualizer">
 				<div id="visualizer-body" class="visualizer-body">
-					<div id="graph" class="graph"><div class="graph-overlay"><div id="status" class="status">Scanning workspace...</div><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div></div></div>
+					<div id="graph" class="graph"><div class="graph-overlay"><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div></div><div id="status" class="status">Scanning workspace...</div></div>
 				</div>
 			</section>
 			<section id="editor" class="editor" hidden aria-live="polite"></section>
@@ -2461,8 +2718,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const nodeSizeValue = document.getElementById('node-size-value');
 		const textSizeInput = document.getElementById('text-size');
 		const textSizeValue = document.getElementById('text-size-value');
+		const heatmapBaselineModelInput = document.getElementById('heatmap-baseline-model');
+		const heatmapMediumThresholdInput = document.getElementById('heatmap-medium-threshold');
+		const heatmapHighThresholdInput = document.getElementById('heatmap-high-threshold');
 		const sideBySideInput = document.getElementById('side-by-side-layout');
 		const hideDocumentationLinksInput = document.getElementById('hide-documentation-links');
+		const showOrphanToggleInput = document.getElementById('show-orphan-toggle');
+		const showTokenHeatmapToggleInput = document.getElementById('show-token-heatmap-toggle');
 		const colorInputs = [...document.querySelectorAll('.color-picker')];
 		const docsInfo = document.getElementById('docs-info');
 		const graphElement = document.getElementById('graph');
@@ -2485,10 +2747,17 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let currentGraphStatus = 'Scanning workspace...';
 		let nodeScale = Number(initialViewSettings.nodeScale) || 1.1;
 		let textScale = Number(initialViewSettings.textScale) || 1;
+		let heatmapBaselineModel = typeof initialViewSettings.heatmapBaselineModel === 'string' ? initialViewSettings.heatmapBaselineModel : '';
+		let heatmapMediumThreshold = readPercentSetting(initialViewSettings.heatmapMediumThreshold, 0.38);
+		let heatmapHighThreshold = readPercentSetting(initialViewSettings.heatmapHighThreshold, 0.72);
 		let sideBySideLayout = Boolean(initialViewSettings.sideBySideLayout);
 		let documentationLinksHidden = Boolean(initialViewSettings.documentationLinksHidden);
+		let heatmapToggleVisible = Boolean(initialViewSettings.heatmapToggleVisible);
+		let orphanToggleVisible = Boolean(initialViewSettings.orphanToggleVisible);
 		let visualizerColors = { ...(initialViewSettings.colors || {}) };
 		let graphLayoutAlgorithm = isGraphLayoutAlgorithm(savedWebviewState.graphLayoutAlgorithm) ? savedWebviewState.graphLayoutAlgorithm : 'hierarchical';
+		let tokenHeatmapEnabled = Boolean(savedWebviewState.tokenHeatmapEnabled);
+		let orphanHighlightEnabled = Boolean(savedWebviewState.orphanHighlightEnabled);
 		const colorPickerFallbackColors = ${JSON.stringify(colorPickerFallbackColors)};
 		let graphZoom = 1;
 		let graphPanX = 0;
@@ -2583,6 +2852,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		});
 
 		document.getElementById('settings').addEventListener('click', () => {
+			syncHeatmapBaselineModelInput();
 			settingsDialogBackdrop.hidden = false;
 			nodeSizeInput.focus();
 		});
@@ -2634,12 +2904,59 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			applyEditorTextScale();
 		});
 
+		heatmapMediumThresholdInput.addEventListener('input', () => {
+			heatmapMediumThreshold = normalizeHeatmapThreshold(Number(heatmapMediumThresholdInput.value) / 100, 0.01, heatmapHighThreshold - 0.01);
+			syncHeatmapThresholdInputs();
+			persistCurrentSettings();
+
+			if (activeGraph && tokenHeatmapEnabled) {
+				renderGraph(activeGraph, true);
+			}
+		});
+
+		heatmapHighThresholdInput.addEventListener('input', () => {
+			heatmapHighThreshold = normalizeHeatmapThreshold(Number(heatmapHighThresholdInput.value) / 100, heatmapMediumThreshold + 0.01, 0.99);
+			syncHeatmapThresholdInputs();
+			persistCurrentSettings();
+
+			if (activeGraph && tokenHeatmapEnabled) {
+				renderGraph(activeGraph, true);
+			}
+		});
+
+		heatmapBaselineModelInput.addEventListener('change', () => {
+			heatmapBaselineModel = heatmapBaselineModelInput.value;
+			persistCurrentSettings();
+
+			if (activeGraph && tokenHeatmapEnabled) {
+				renderGraph(activeGraph, true);
+			}
+		});
+
 		sideBySideInput.addEventListener('change', () => {
 			setSideBySideLayout(sideBySideInput.checked);
 		});
 
 		hideDocumentationLinksInput.addEventListener('change', () => {
 			setDocumentationLinksHidden(hideDocumentationLinksInput.checked);
+		});
+
+		showTokenHeatmapToggleInput.addEventListener('change', () => {
+			heatmapToggleVisible = showTokenHeatmapToggleInput.checked;
+			persistCurrentSettings();
+
+			if (activeGraph) {
+				renderGraph(activeGraph, true);
+			}
+		});
+
+		showOrphanToggleInput.addEventListener('change', () => {
+			orphanToggleVisible = showOrphanToggleInput.checked;
+			persistCurrentSettings();
+
+			if (activeGraph) {
+				renderGraph(activeGraph, true);
+			}
 		});
 
 		for (const colorInput of colorInputs) {
@@ -2762,6 +3079,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			nodeSizeValue.textContent = Math.round(nodeScale * 100) + '%';
 			textSizeInput.value = String(textScale);
 			textSizeValue.textContent = Math.round(textScale * 100) + '%';
+			showTokenHeatmapToggleInput.checked = heatmapToggleVisible;
+			showOrphanToggleInput.checked = orphanToggleVisible;
+			syncHeatmapBaselineModelInput();
+			syncHeatmapThresholdInputs();
 
 			for (const colorInput of colorInputs) {
 				colorInput.value = visualizerColors[colorInput.dataset.colorKey] || colorPickerFallbackColors[colorInput.dataset.colorKey] || colorInput.value;
@@ -2793,8 +3114,49 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					nodeScale,
 					textScale,
 					colors: visualizerColors,
+					heatmapToggleVisible,
+					orphanToggleVisible,
+					heatmapBaselineModel,
+					heatmapMediumThreshold,
+					heatmapHighThreshold,
 				},
 			});
+		}
+
+		function readPercentSetting(value, fallback) {
+			return normalizeHeatmapThreshold(Number(value), 0.01, 0.99, fallback);
+		}
+
+		function normalizeHeatmapThreshold(value, min, max, fallback = min) {
+			const number = Number(value);
+			const candidate = Number.isFinite(number) ? number : fallback;
+
+			return Math.min(max, Math.max(min, candidate));
+		}
+
+		function syncHeatmapThresholdInputs() {
+			if (heatmapMediumThreshold >= heatmapHighThreshold) {
+				heatmapMediumThreshold = normalizeHeatmapThreshold(heatmapHighThreshold - 0.01, 0.01, 0.98, 0.38);
+			}
+
+			heatmapMediumThresholdInput.value = String(Math.round(heatmapMediumThreshold * 100));
+			heatmapHighThresholdInput.value = String(Math.round(heatmapHighThreshold * 100));
+		}
+
+		function syncHeatmapBaselineModelInput() {
+			const availableModels = activeGraph?.availableModels || [];
+			const modelValues = unique([heatmapBaselineModel, ...availableModels.map(model => model.value)].filter(Boolean));
+			const options = ['<option value="">Use graph-relative fallback</option>'];
+
+			for (const modelValue of modelValues) {
+				const model = availableModels.find(model => model.value === modelValue);
+				const label = model?.label || modelValue;
+
+				options.push('<option value="' + escapeAttribute(modelValue) + '"' + (modelValue === heatmapBaselineModel ? ' selected' : '') + '>' + escapeHtml(label) + '</option>');
+			}
+
+			heatmapBaselineModelInput.innerHTML = options.join('');
+			heatmapBaselineModelInput.value = heatmapBaselineModel;
 		}
 
 		function setSideBySideLayout(enabled, shouldRender = true, shouldPersist = true) {
@@ -2838,11 +3200,39 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderGraphOverlay() {
-			return '<div class="graph-overlay"><div id="status" class="status">' + escapeHtml(currentGraphStatus) + '</div><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div><label class="layout-control">Layout<select id="layout-algorithm"><option value="hierarchical"' + (graphLayoutAlgorithm === 'hierarchical' ? ' selected' : '') + '>Hierarchical</option><option value="radial"' + (graphLayoutAlgorithm === 'radial' ? ' selected' : '') + '>Radial</option><option value="force"' + (graphLayoutAlgorithm === 'force' ? ' selected' : '') + '>Force-directed</option></select></label></div>';
+			const heatmapToggle = heatmapToggleVisible ? '<label class="graph-toggle" title="Show context token weight as a glow behind agent nodes"><input id="token-heatmap" type="checkbox" ' + (tokenHeatmapEnabled ? 'checked' : '') + '>Token heatmap</label>' : '';
+			const orphanToggle = orphanToggleVisible ? '<label class="graph-toggle" title="Highlight disconnected editable agents prompts and skills"><input id="orphan-highlight" type="checkbox" ' + (orphanHighlightEnabled ? 'checked' : '') + '>Identify orphans</label>' : '';
+			const status = '<div id="status" class="status">' + escapeHtml(currentGraphStatus) + '</div>';
+
+			return '<div class="graph-overlay"><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div>' + heatmapToggle + orphanToggle + '<label class="layout-control">Layout<select id="layout-algorithm"><option value="hierarchical"' + (graphLayoutAlgorithm === 'hierarchical' ? ' selected' : '') + '>Hierarchical</option><option value="radial"' + (graphLayoutAlgorithm === 'radial' ? ' selected' : '') + '>Radial</option><option value="force"' + (graphLayoutAlgorithm === 'force' ? ' selected' : '') + '>Force-directed</option></select></label></div>' + status;
 		}
 
 		function installGraphOverlayControls() {
 			const layoutSelect = document.getElementById('layout-algorithm');
+			const heatmapButton = document.getElementById('token-heatmap');
+			const orphanButton = document.getElementById('orphan-highlight');
+
+			if (heatmapButton) {
+				heatmapButton.addEventListener('change', () => {
+					tokenHeatmapEnabled = heatmapButton.checked;
+					persistGraphViewState();
+
+					if (activeGraph) {
+						renderGraph(activeGraph, true);
+					}
+				});
+			}
+
+			if (orphanButton) {
+				orphanButton.addEventListener('change', () => {
+					orphanHighlightEnabled = orphanButton.checked;
+					persistGraphViewState();
+
+					if (activeGraph) {
+						renderGraph(activeGraph, true);
+					}
+				});
+			}
 
 			if (!layoutSelect) {
 				return;
@@ -2854,7 +3244,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				}
 
 				graphLayoutAlgorithm = layoutSelect.value;
-				vscode.setState?.({ ...(vscode.getState?.() || {}), graphLayoutAlgorithm });
+				persistGraphViewState();
 				graphShouldCenterOnNextRender = true;
 
 				if (activeGraph) {
@@ -2865,6 +3255,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		function isGraphLayoutAlgorithm(value) {
 			return value === 'hierarchical' || value === 'radial' || value === 'force';
+		}
+
+		function persistGraphViewState() {
+			vscode.setState?.({ ...(vscode.getState?.() || {}), graphLayoutAlgorithm, tokenHeatmapEnabled, orphanHighlightEnabled });
 		}
 
 		function setGraphLoading(loading, label = 'Growing visualization...') {
@@ -2885,6 +3279,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		function renderGraph(graph, preserveEditor = false) {
 			activeGraph = graph;
+			syncHeatmapBaselineModelInput();
 			setStatus(graph.nodes.length + ' nodes, ' + graph.links.length + ' edges');
 
 			if (graph.nodes.length === 0) {
@@ -2939,6 +3334,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}).join('');
 
 			const subAgentIds = new Set(graph.links.filter(link => link.type === 'uses-agent').map(link => link.target));
+			const orphanNodeIds = getOrphanNodeIds(graph);
+			const fallbackHeatmapMaxTokens = getFallbackHeatmapMaxTokens(graph);
 			const nodes = graph.nodes.map(node => {
 				const position = positions.get(node.id);
 				const label = escapeHtml(node.label);
@@ -2958,12 +3355,14 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				const handoffDetails = node.type === 'handoff'
 					? [node.handoffAgent ? 'Target: ' + node.handoffAgent : '', node.handoffPrompt ? 'Prompt: ' + node.handoffPrompt : '', node.handoffSend ? 'Auto-submit prompt' : 'Prefill prompt']
 					: [];
-				const title = [node.path || node.id, audienceLabel ? 'Affects: ' + audienceLabel : '', node.type === 'instruction' ? 'Instruction area' : '', modelLabel ? 'Model: ' + modelLabel : '', ...skillDetails, ...mcpDetails, ...hookDetails, ...handoffDetails].filter(Boolean).join(' - ');
-				const className = [node.unresolved ? 'node unresolved' : 'node', 'node-' + node.type, node.type === 'skill' && !node.disableModelInvocation ? 'model-invocable' : '', node.id === selectedNodeId ? 'selected' : ''].filter(Boolean).join(' ');
+				const isOrphan = orphanHighlightEnabled && orphanNodeIds.has(node.id);
+				const title = [node.path || node.id, audienceLabel ? 'Affects: ' + audienceLabel : '', node.type === 'instruction' ? 'Instruction area' : '', modelLabel ? 'Model: ' + modelLabel : '', isOrphan ? 'Orphan: disconnected editable customization' : '', ...skillDetails, ...mcpDetails, ...hookDetails, ...handoffDetails].filter(Boolean).join(' - ');
+				const className = [node.unresolved ? 'node unresolved' : 'node', 'node-' + node.type, tokenHeatmapEnabled && node.type === 'agent' && node.contextEstimateTokens ? 'heatmap' : '', isOrphan ? 'orphan' : '', node.type === 'skill' && !node.disableModelInvocation ? 'model-invocable' : '', node.id === selectedNodeId ? 'selected' : ''].filter(Boolean).join(' ');
 				const fillColor = colors[node.type];
 				const isInvocableAgent = node.type === 'agent' && Boolean(node.uri) && node.userInvocable !== false;
 				const contextLabel = node.type === 'agent' && node.uri && node.userInvocable !== false && node.contextEstimateTokens ? formatContextEstimate(node.contextEstimateTokens) : '';
 				const hookEventCount = node.type === 'hook-event' && node.hookEventCommandCount ? node.hookEventCommandCount + ' cmd' : '';
+				const heatmapGlow = getHeatmapGlow(node, fallbackHeatmapMaxTokens, isInvocableAgent);
 				const shape = node.type === 'instruction'
 					? '<rect class="node-shape instruction-area" x="-48" y="-22" width="96" height="44" rx="8" fill="' + fillColor + '"></rect>'
 					: node.type === 'hook-event'
@@ -2989,6 +3388,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return '<g class="' + className + '" data-node-id="' + escapeAttribute(node.id) + '" transform="translate(' + position.x + ' ' + position.y + ')" tabindex="0" role="button" aria-label="Edit ' + escapeAttribute(node.label) + '">' +
 					'<title>' + escapeHtml(title) + '</title>' +
 					'<g transform="scale(' + nodeScale + ')">' +
+					heatmapGlow +
 					shape +
 					agentMarker +
 					skillMarker +
@@ -3017,6 +3417,81 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					}
 				});
 			}
+		}
+
+		function getHeatmapGlow(node, fallbackHeatmapMaxTokens, isInvocableAgent) {
+			if (!tokenHeatmapEnabled || node.type !== 'agent' || !node.contextEstimateTokens) {
+				return '';
+			}
+
+			const heatmapMaxTokens = getHeatmapMaxTokens(node, fallbackHeatmapMaxTokens);
+			const ratio = heatmapMaxTokens > 0 ? node.contextEstimateTokens / heatmapMaxTokens : 0;
+			const level = getHeatmapLevel(ratio);
+			const radius = isInvocableAgent ? 21 : 18;
+
+			return '<circle class="heatmap-glow heatmap-' + level + '" r="' + radius + '"></circle>';
+		}
+
+		function getHeatmapLevel(ratio) {
+			if (ratio >= heatmapHighThreshold) {
+				return 'high';
+			}
+
+			if (ratio >= heatmapMediumThreshold) {
+				return 'medium';
+			}
+
+			return 'low';
+		}
+
+		function getHeatmapMaxTokens(node, fallbackHeatmapMaxTokens) {
+			const modelMaxTokens = getModelMaxInputTokens(node.model);
+			const baselineModelMaxTokens = getModelMaxInputTokens(heatmapBaselineModel);
+
+			return modelMaxTokens || baselineModelMaxTokens || fallbackHeatmapMaxTokens;
+		}
+
+		function getModelMaxInputTokens(modelValue) {
+			if (!modelValue) {
+				return 0;
+			}
+
+			const model = activeGraph?.availableModels?.find(model => model.value === modelValue);
+
+			return Number.isFinite(model?.maxInputTokens) && model.maxInputTokens > 0 ? model.maxInputTokens : 0;
+		}
+
+		function getFallbackHeatmapMaxTokens(graph) {
+			return Math.max(0, ...graph.nodes.filter(node => node.type === 'agent').map(node => node.contextEstimateTokens || 0));
+		}
+
+		function getOrphanNodeIds(graph) {
+			if (!orphanHighlightEnabled) {
+				return new Set();
+			}
+
+			const connectedNodeIds = new Set();
+
+			for (const link of graph.links) {
+				connectedNodeIds.add(link.source);
+				connectedNodeIds.add(link.target);
+			}
+
+			return new Set(graph.nodes
+				.filter(node => isOrphanCandidate(node) && !connectedNodeIds.has(node.id))
+				.map(node => node.id));
+		}
+
+		function isOrphanCandidate(node) {
+			if (!node.uri || node.unresolved) {
+				return false;
+			}
+
+			if (node.type === 'agent' || node.type === 'skill') {
+				return node.userInvocable === false;
+			}
+
+			return node.type === 'prompt';
 		}
 
 		function getGraphLayoutWidth(graph, viewportWidth) {

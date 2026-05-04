@@ -102,6 +102,7 @@ export interface AvailableTool {
 export interface AvailableModel {
 	label: string;
 	value: string;
+	maxInputTokens?: number;
 }
 
 export interface GraphLink {
