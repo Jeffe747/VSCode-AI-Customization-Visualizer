@@ -2,6 +2,8 @@
 # Tasks
 
 # Done
+- Added agent, skill, and cogwheel glyphs to the three nodes in resources/agent-graph-icon.png.
+- Added the extension icon to README.md under an Extension Icon header.
 - Fixed the visualizer height calculation so saving while scrolled in the edit view no longer makes the graph grow larger.
 - Preserved the edit view scroll position when saving a node so the Save-button refresh no longer jumps to the top.
 - Removed hard graph panning borders so users can drag freely in every direction without view limits.
