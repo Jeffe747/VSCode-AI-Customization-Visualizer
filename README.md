@@ -14,4 +14,4 @@ Use the toolbar settings button to adjust graph element size and editor text siz
 
 ## Contributing to development
 
-If want to contribute to the development of this extension, then make a pull-request with a md files that outlines the suggestion and steps needed for an AI to implement it.
+If want to contribute to the development of this extension, then make a pull-request with *.md files, that outlines the suggestion and steps needed for an AI to implement it.
