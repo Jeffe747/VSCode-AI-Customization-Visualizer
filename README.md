@@ -1,7 +1,5 @@
 # Copilot AI Customization Visualizer
 
-## Extension Icon
-
 ![Copilot AI Customization Visualizer extension icon](resources/agent-graph.png)
 
 Copilot AI Customization Visualizer is a VS Code extension for inspecting and editing project Copilot AI customization files from one visual workspace. It maps custom agents, prompt files, instruction files, hooks, model choices, sub-agent links, and active tools into an interactive graph.
