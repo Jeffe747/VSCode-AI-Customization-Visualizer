@@ -2,6 +2,11 @@
 # Tasks
 
 # Done
+- Create a test that validates that filters is working.
+- The 'tools' filter is still broken
+- Add small buttons for prebuilt tools selection. Should be added above the filter. Create a small list of clickable prebuilt selections. 1. "Default Agent" with execute, read, edit, search, agent, web, todo.  2. Planning Agent with read, search, web, todo
+- Nodes are placed on top of each other when the nodes exceed the size of the visualizer.
+- The 'tools' filter broke, when editing agents.
 - Enforced mandatory label, agent, prompt, and send fields when saving from the direct handoff node editor.
 - Made embedded handoff label, agent, prompt, and send required when saving from the agent edit view, with model remaining optional.
 - Fixed agent edit view rendering by exposing placeholder constants inside the webview script.

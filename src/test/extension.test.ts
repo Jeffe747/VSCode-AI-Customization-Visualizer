@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import matter = require('gray-matter');
 import * as vscode from 'vscode';
-import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, stringifyCustomizationMarkdown, validateRequiredHandoffFields } from '../extension';
+import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, isToolChoiceVisibleForFilter, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
 import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 
 suite('Extension Test Suite', () => {
@@ -377,6 +377,18 @@ suite('Extension Test Suite', () => {
 		assert.match(markdown, /^tools: \[search,custom-tool\]$/m);
 		assert.doesNotMatch(markdown, /^tools:\n\s+- /m);
 		assert.deepStrictEqual(matter(markdown).data.tools, ['search', 'custom-tool']);
+	});
+
+	test('filters tools by trimmed case-insensitive contains text', () => {
+		assert.strictEqual(isToolChoiceVisibleForFilter('read', ''), true);
+		assert.strictEqual(isToolChoiceVisibleForFilter('read', '  RE  '), true);
+		assert.strictEqual(isToolChoiceVisibleForFilter('copilot_fetchWebPage', 'fetch'), true);
+		assert.strictEqual(isToolChoiceVisibleForFilter('search', 'read'), false);
+	});
+
+	test('keeps hidden filtered tool rows from overriding display none', () => {
+		assert.match(toolChoiceHiddenCssRule, /\.tool-choice-list\s+\.choice-check\[hidden\]/);
+		assert.match(toolChoiceHiddenCssRule, /display:\s*none/);
 	});
 
 	test('saves handoff model inside handoff frontmatter item', () => {

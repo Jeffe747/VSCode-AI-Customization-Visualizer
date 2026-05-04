@@ -12,6 +12,15 @@ const mcpGlob = '**/.vscode/mcp.json';
 const excludeGlob = '**/{node_modules,out,dist,.git}/**';
 const agentDescriptionPlaceholder = 'Use when: describe when this agent should be selected.';
 const agentBodyPlaceholder = "Describe this agent's role, workflow, constraints, and output style.";
+export const toolChoiceHiddenCssRule = `.tool-choice-list .choice-check[hidden] {
+			display: none;
+		}`;
+
+export function isToolChoiceVisibleForFilter(toolName: string, filterValue: string): boolean {
+	const normalizedFilter = filterValue.trim().toLowerCase();
+
+	return !normalizedFilter || toolName.toLowerCase().includes(normalizedFilter);
+}
 
 export function activate(context: vscode.ExtensionContext) {
 	const scanner = new WorkspaceScanner();
@@ -1454,6 +1463,27 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			margin-top: 8px;
 		}
 
+		.tool-preset-list {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+			margin-top: 8px;
+		}
+
+		.tool-preset-button {
+			min-height: 22px;
+			border-color: var(--panel-border);
+			padding: 2px 7px;
+			color: var(--vscode-sideBar-foreground);
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 94%, var(--vscode-sideBar-foreground));
+			font-size: 10px;
+		}
+
+		.tool-preset-button:hover {
+			border-color: var(--vscode-focusBorder);
+			background: color-mix(in srgb, var(--vscode-button-hoverBackground) 20%, var(--vscode-sideBar-background));
+		}
+
 		.tool-filter input {
 			margin-top: 0;
 		}
@@ -1535,6 +1565,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			min-height: 34px;
 			padding: 6px 8px;
 		}
+
+
+		${toolChoiceHiddenCssRule}
 
 		.tool-choice-list .choice-check .help-marker {
 			margin-left: 0;
@@ -2064,6 +2097,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let documentationLinksHidden = Boolean(vscode.getState()?.documentationLinksHidden);
 		let graphPanX = 0;
 		let graphPanY = 0;
+		let toolFilterValue = '';
 		let toolFilterTimeout;
 		let resizeTimeout;
 		const colors = {
@@ -2096,6 +2130,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			{ name: 'env', description: 'Additional environment variables as a JSON object.', placeholder: '{"NODE_ENV":"test"}' },
 			{ name: 'timeout', description: 'Timeout in seconds. Default is 30.', placeholder: '30' },
 		];
+		${isToolChoiceVisibleForFilter.toString()}
 		const fieldHelp = {
 			agentName: 'Custom agent name. If not specified, VS Code uses the file name.',
 			promptName: 'Prompt name used after typing / in chat. If not specified, VS Code uses the file name.',
@@ -2128,6 +2163,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			instructionBody: 'Markdown instructions that define guidelines and rules for the affected AI tools.',
 			skillBody: 'Markdown instructions, workflow steps, examples, and links to resources in the skill directory.',
 		};
+		const toolPresets = [
+			{ label: 'Default Agent', tools: ['execute', 'read', 'edit', 'search', 'agent', 'web', 'todo'] },
+			{ label: 'Planning Agent', tools: ['read', 'search', 'web', 'todo'] },
+		];
 
 		setGraphLoading(true, 'Growing visualization...');
 		setSideBySideLayout(sideBySideLayout, false);
@@ -2378,10 +2417,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
-			const width = Math.max(320, graphElement.clientWidth || 320);
-			const positions = layoutGraph(graph, width);
+			const viewportWidth = Math.max(320, graphElement.clientWidth || 320);
+			const layoutWidth = getGraphLayoutWidth(graph, viewportWidth);
+			const positions = layoutGraph(graph, layoutWidth);
 			const maxY = Math.max(...[...positions.values()].map(position => position.y));
 			const height = Math.max(320, maxY + 92 * nodeScale);
+			graphPanX = Math.min(graphPanX, Math.max(0, layoutWidth - viewportWidth));
 			const currentSelectionExists = graph.nodes.some(node => node.id === selectedNodeId);
 
 			if (!currentSelectionExists) {
@@ -2478,8 +2519,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				'</g>';
 			}).join('');
 
-			graphElement.innerHTML = '<svg width="100%" height="' + height + '" viewBox="' + graphPanX + ' ' + graphPanY + ' ' + width + ' ' + height + '" role="img" aria-label="Copilot AI customization graph">' + edges + nodes + '</svg>';
-			installGraphPan(graphElement.querySelector('svg'), width, height);
+			graphElement.innerHTML = '<svg width="100%" height="' + height + '" viewBox="' + graphPanX + ' ' + graphPanY + ' ' + viewportWidth + ' ' + height + '" role="img" aria-label="Copilot AI customization graph">' + edges + nodes + '</svg>';
+			installGraphPan(graphElement.querySelector('svg'), viewportWidth, height);
 
 			for (const nodeElement of graphElement.querySelectorAll('.node')) {
 				nodeElement.addEventListener('click', () => selectNode(nodeElement.dataset.nodeId));
@@ -2490,6 +2531,81 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					}
 				});
 			}
+		}
+
+		function getGraphLayoutWidth(graph, viewportWidth) {
+			const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
+			const childrenById = new Map(graph.nodes.map(node => [node.id, []]));
+			const incoming = new Map(graph.nodes.map(node => [node.id, 0]));
+			const hierarchicalLinks = graph.links.filter(link => link.type === 'uses-agent' || link.type === 'uses-handoff' || link.type === 'handoff-to-agent');
+
+			for (const link of hierarchicalLinks) {
+				if (!childrenById.has(link.source) || !nodeById.has(link.target)) {
+					continue;
+				}
+
+				childrenById.get(link.source).push(link.target);
+				incoming.set(link.target, (incoming.get(link.target) || 0) + 1);
+			}
+
+			const roots = graph.nodes
+				.filter(node => (node.type === 'agent' || node.type === 'handoff') && (incoming.get(node.id) || 0) === 0)
+				.sort(compareNodes);
+			const levels = new Map();
+			const queue = roots.map(node => ({ id: node.id, depth: 0 }));
+
+			while (queue.length > 0) {
+				const item = queue.shift();
+				const existingDepth = levels.get(item.id);
+
+				if ((existingDepth !== undefined && existingDepth >= item.depth) || item.depth > graph.nodes.length) {
+					continue;
+				}
+
+				levels.set(item.id, item.depth);
+
+				for (const childId of [...(childrenById.get(item.id) || [])].sort((left, right) => compareNodes(nodeById.get(left), nodeById.get(right)))) {
+					queue.push({ id: childId, depth: item.depth + 1 });
+				}
+			}
+
+			for (const node of graph.nodes) {
+				if (!levels.has(node.id)) {
+					levels.set(node.id, node.type === 'instruction' ? -2 : node.type === 'prompt' || node.type === 'skill' ? -1 : 0);
+				}
+			}
+
+			for (const link of graph.links.filter(link => link.type === 'runs-with-agent')) {
+				const targetLevel = levels.get(link.target) || 0;
+				levels.set(link.source, targetLevel - 1);
+			}
+
+			const agentLevels = graph.nodes.filter(node => node.type === 'agent').map(node => levels.get(node.id) || 0);
+			const belowAgentsLevel = (agentLevels.length ? Math.max(...agentLevels) : 0) + 1;
+
+			for (const node of graph.nodes) {
+				if (node.type === 'mcp' || node.type === 'hook' || node.type === 'tool') {
+					levels.set(node.id, belowAgentsLevel);
+				}
+			}
+
+			for (const link of graph.links.filter(link => link.type === 'has-hook-event')) {
+				levels.set(link.target, (levels.get(link.source) || belowAgentsLevel) + 1);
+			}
+
+			const minLevel = Math.min(...levels.values());
+			const nodeCountsByLevel = new Map();
+
+			for (const node of graph.nodes) {
+				const level = (levels.get(node.id) || 0) - minLevel;
+				nodeCountsByLevel.set(level, (nodeCountsByLevel.get(level) || 0) + 1);
+			}
+
+			const maxNodesOnLevel = Math.max(1, ...nodeCountsByLevel.values());
+			const minimumNodeGap = 108 * nodeScale;
+			const sidePadding = 72 * nodeScale;
+
+			return Math.max(viewportWidth, maxNodesOnLevel * minimumNodeGap + sidePadding * 2);
 		}
 
 		function installGraphPan(svg, width, height) {
@@ -2811,15 +2927,28 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const saveButton = document.getElementById('save-node');
 			const toolFilterInput = document.getElementById('tool-filter');
 			const toolList = document.getElementById('tool-check-list');
+			const toolPresetList = document.getElementById('tool-preset-list');
 
 			if (toolFilterInput) {
 				toolFilterInput.addEventListener('input', scheduleToolFilter);
+				toolFilterInput.value = toolFilterValue;
+				filterToolChoices();
 			}
 
 			if (toolList) {
 				toolList.addEventListener('change', event => {
 					if (event.target?.classList?.contains('edit-tool')) {
 						updateActiveToolPills();
+					}
+				});
+			}
+
+			if (toolPresetList) {
+				toolPresetList.addEventListener('click', event => {
+					const presetButton = event.target?.closest?.('.tool-preset-button');
+
+					if (presetButton) {
+						applyToolPreset(presetButton.dataset.toolPreset);
 					}
 				});
 			}
@@ -3323,12 +3452,17 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const selected = new Set(selectedTools);
 			const descriptions = new Map(availableTools.map(tool => [tool.name, tool.description || tool.name]));
 			const toolNames = unique([...availableTools.map(tool => tool.name), ...selectedTools]).sort((left, right) => left.localeCompare(right));
+			const presetButtons = renderToolPresetButtons();
 
 			if (!toolNames.length) {
-				return '<div class="field-label">' + renderFieldLabel('Tools', fieldHelp.tools) + '</div><p class="choice-empty">No available tools found.</p><div id="tool-check-list" class="choice-list"></div>' + renderCustomToolInput();
+				return '<div class="field-label">' + renderFieldLabel('Tools', fieldHelp.tools) + '</div>' + presetButtons + '<p class="choice-empty">No available tools found.</p><div id="tool-check-list" class="choice-list"></div>' + renderCustomToolInput();
 			}
 
-			return '<details class="choice-details"><summary>' + renderFieldLabel('Tools', fieldHelp.tools) + renderSelectedToolPills([...selected]) + '</summary><div class="tool-filter"><input id="tool-filter" type="text" placeholder="Filter tools"></div>' + renderSelectedToolPills([...selected]) + '<div id="tool-check-list" class="choice-list tool-choice-list">' + toolNames.map(toolName => renderToolCheckbox(toolName, selected.has(toolName), descriptions.get(toolName) || toolName)).join('') + '</div>' + renderCustomToolInput() + '</details>';
+			return '<details class="choice-details"><summary>' + renderFieldLabel('Tools', fieldHelp.tools) + renderSelectedToolPills([...selected]) + '</summary>' + presetButtons + '<div class="tool-filter"><input id="tool-filter" type="text" value="' + escapeAttribute(toolFilterValue) + '" placeholder="Filter tools"></div>' + renderSelectedToolPills([...selected]) + '<div id="tool-check-list" class="choice-list tool-choice-list">' + toolNames.map(toolName => renderToolCheckbox(toolName, selected.has(toolName), descriptions.get(toolName) || toolName)).join('') + '</div>' + renderCustomToolInput() + '</details>';
+		}
+
+		function renderToolPresetButtons() {
+			return '<div id="tool-preset-list" class="tool-preset-list" aria-label="Prebuilt tool selections">' + toolPresets.map((preset, index) => '<button class="tool-preset-button" type="button" data-tool-preset="' + index + '" title="' + escapeAttribute(preset.tools.join(', ')) + '">' + escapeHtml(preset.label) + '</button>').join('') + '</div>';
 		}
 
 		function renderSelectedToolPills(toolNames) {
@@ -3413,16 +3547,21 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function scheduleToolFilter() {
+			toolFilterValue = document.getElementById('tool-filter')?.value || '';
 			clearTimeout(toolFilterTimeout);
 			toolFilterTimeout = setTimeout(filterToolChoices, 220);
 		}
 
 		function filterToolChoices() {
-			const filterValue = document.getElementById('tool-filter')?.value.trim().toLowerCase() || '';
+			const toolFilterInput = document.getElementById('tool-filter');
+
+			if (toolFilterInput) {
+				toolFilterValue = toolFilterInput.value;
+			}
 
 			for (const toolChoice of editorElement.querySelectorAll('#tool-check-list .choice-check')) {
-				const toolName = toolChoice.querySelector('.edit-tool')?.value.toLowerCase() || '';
-				toolChoice.hidden = Boolean(filterValue) && !toolName.includes(filterValue);
+				const toolName = toolChoice.querySelector('.edit-tool')?.value || '';
+				toolChoice.hidden = !isToolChoiceVisibleForFilter(toolName, toolFilterValue);
 			}
 		}
 
@@ -3462,6 +3601,30 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			filterToolChoices();
 			customToolName.value = '';
 			customToolName.focus();
+		}
+
+		function applyToolPreset(presetIndex) {
+			const preset = toolPresets[Number(presetIndex)];
+			const toolList = document.getElementById('tool-check-list');
+
+			if (!preset || !toolList) {
+				return;
+			}
+
+			const presetTools = new Set(preset.tools);
+
+			for (const toolName of preset.tools) {
+				if (![...editorElement.querySelectorAll('.edit-tool')].some(tool => tool.value === toolName)) {
+					toolList.insertAdjacentHTML('beforeend', renderToolCheckbox(toolName, false, 'Prebuilt tool selection.'));
+				}
+			}
+
+			for (const toolInput of editorElement.querySelectorAll('.edit-tool')) {
+				toolInput.checked = presetTools.has(toolInput.value);
+			}
+
+			updateActiveToolPills();
+			filterToolChoices();
 		}
 
 		function compareNodes(left, right) {

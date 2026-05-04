@@ -1,17 +1,16 @@
 ---
 name: Proceed
 description: 'Use when: describe when this agent should be selected.'
-tools: []
+tools: [execute,read,edit,search,agent,web,todo]
 agents: []
 user-invocable: true
 disable-model-invocation: false
 handoffs:
   - send: false
     label: Proceed
-    agent: agent
+    agent: Proceed
     prompt: Proceed
-model: Auto (copilot)
 ---
 # Worker
 
-Describe this agent's role, workflow, constraints, and output style.
+Read AGENTS.md and understand it.
