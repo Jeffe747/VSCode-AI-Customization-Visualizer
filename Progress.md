@@ -3,6 +3,7 @@
 
 
 # Done
+- Moved vsce to devDependencies and revalidated VSIX package contents.
 - Added official GitHub repository metadata and tightened VSIX package contents for best-practice publishing.
 - Updated .gitignore to allow package-lock.json to be tracked.
 - Reviewed whether .gitignore matches the VS Code extension workspace outputs.

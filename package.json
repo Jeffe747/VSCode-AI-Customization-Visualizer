@@ -2,7 +2,7 @@
   "name": "aivisualizer",
   "displayName": "Copilot AI Customization Visualizer",
   "description": "Visualize and edit Copilot AI customization files.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "author": {
     "name": "Jeppe Andreas Jakobsen",
     "url": "https://github.com/Jeffe747"
@@ -105,10 +105,10 @@
     "eslint": "^9.39.3",
     "npm-run-all": "^4.1.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.1"
+    "typescript-eslint": "^8.56.1",
+    "vsce": "^2.15.0"
   },
   "dependencies": {
-    "gray-matter": "^4.0.3",
-    "vsce": "^2.15.0"
+    "gray-matter": "^4.0.3"
   }
 }
