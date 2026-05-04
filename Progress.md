@@ -2,6 +2,7 @@
 # Tasks
 
 # Done
+- Made bidirectional graph links clearer by separating reciprocal arrows onto curved opposing paths.
 - Made webview error messages appear as dismissable toast notifications.
 - Validated new customization file creation before writing so duplicate names and path conflicts show a non-destructive user error.
 - Moved the visualizer node and edge count to the bottom-left corner with smaller text.

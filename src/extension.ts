@@ -3399,6 +3399,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				}
 			}
 
+			const reciprocalLinkIds = getReciprocalLinkIds(graph.links);
 			const edges = graph.links.map(link => {
 				const source = positions.get(link.source);
 				const target = positions.get(link.target);
@@ -3407,13 +3408,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					return '';
 				}
 
+				const edgeGeometry = getEdgeGeometry(source, target, reciprocalLinkIds.has(link.id));
 
-				const arrowX = (source.x + target.x) / 2;
-				const arrowY = (source.y + target.y) / 2;
-				const arrowAngle = Math.atan2(target.y - source.y, target.x - source.x) * 180 / Math.PI;
-
-				return '<path class="edge" fill="none" d="M ' + source.x + ' ' + source.y + ' L ' + target.x + ' ' + target.y + '" />' +
-					'<path class="edge-arrow" d="M -3 -4 L 5 0 L -3 4 Z" transform="translate(' + arrowX + ' ' + arrowY + ') rotate(' + arrowAngle + ')" />';
+				return '<path class="edge" fill="none" d="' + edgeGeometry.path + '" />' +
+					'<path class="edge-arrow" d="M -3 -4 L 5 0 L -3 4 Z" transform="translate(' + edgeGeometry.arrowX + ' ' + edgeGeometry.arrowY + ') rotate(' + edgeGeometry.arrowAngle + ')" />';
 			}).join('');
 
 			const subAgentIds = new Set(graph.links.filter(link => link.type === 'uses-agent').map(link => link.target));
@@ -3500,6 +3498,50 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					}
 				});
 			}
+		}
+
+		function getReciprocalLinkIds(links) {
+			const directionKeys = new Set(links.map(link => getLinkDirectionKey(link.source, link.target)));
+			const reciprocalLinkIds = new Set();
+
+			for (const link of links) {
+				if (directionKeys.has(getLinkDirectionKey(link.target, link.source))) {
+					reciprocalLinkIds.add(link.id);
+				}
+			}
+
+			return reciprocalLinkIds;
+		}
+
+		function getLinkDirectionKey(source, target) {
+			return source + '->' + target;
+		}
+
+		function getEdgeGeometry(source, target, isReciprocal) {
+			if (!isReciprocal) {
+				return {
+					path: 'M ' + source.x + ' ' + source.y + ' L ' + target.x + ' ' + target.y,
+					arrowX: (source.x + target.x) / 2,
+					arrowY: (source.y + target.y) / 2,
+					arrowAngle: Math.atan2(target.y - source.y, target.x - source.x) * 180 / Math.PI,
+				};
+			}
+
+			const dx = target.x - source.x;
+			const dy = target.y - source.y;
+			const length = Math.max(1, Math.hypot(dx, dy));
+			const offset = 22;
+			const controlX = (source.x + target.x) / 2 + (-dy / length) * offset;
+			const controlY = (source.y + target.y) / 2 + (dx / length) * offset;
+			const arrowX = (source.x + target.x + 2 * controlX) / 4;
+			const arrowY = (source.y + target.y + 2 * controlY) / 4;
+
+			return {
+				path: 'M ' + source.x + ' ' + source.y + ' Q ' + controlX + ' ' + controlY + ' ' + target.x + ' ' + target.y,
+				arrowX,
+				arrowY,
+				arrowAngle: Math.atan2(dy, dx) * 180 / Math.PI,
+			};
 		}
 
 		function getHeatmapGlow(node, fallbackHeatmapMaxTokens, isInvocableAgent) {
