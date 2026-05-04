@@ -2,6 +2,9 @@
 # Tasks
 
 # Done
+- Center aligned the graph viewport on node bounds after graph refreshes, layout changes, and element-size changes.
+- Added VS Code Problems panel diagnostics for malformed customization files, missing agent/prompt/skill names, invalid skill metadata, and unresolved agent references.
+- Added a graph layout dropdown with Hierarchical, Radial, and Force-directed layout algorithms for larger AI workspaces.
 - The cogwheel icon for the 'settings-menu' is much more clean. Reuse the icon for the sub-agent nodes.
 - Gemini has done some code review. Address the two points outlined:
 1. Testing coverage: The parsing logic inside mapper.ts and extension.ts involves heavy object manipulation (e.g., normalizeObject, parsing handoffs). Ensuring comprehensive unit tests exist in the test directory for these utilities is critical.
@@ -195,7 +198,7 @@
 - Add a selector tool for Prompt agent selection, ie. model or custom-agent
 - Add a ai model selector for the prompt edit view.
 
-# Start prompt
+# Initial start 
 --
 > Scaffold vscode extension
 --

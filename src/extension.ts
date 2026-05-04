@@ -29,6 +29,12 @@ interface VisualizerSettings {
 	colors: Partial<Record<VisualizerColorKey, string>>;
 }
 
+interface ReadProblem {
+	uri: vscode.Uri;
+	message: string;
+	details: string;
+}
+
 const visualizerColorDefinitions: VisualizerColorDefinition[] = [
 	{ key: 'instruction', label: 'Instructions', description: 'Instruction file areas' },
 	{ key: 'skill', label: 'Skills', description: 'Agent skill nodes' },
@@ -158,12 +164,14 @@ function readNumberInRange(value: unknown, min: number, max: number, fallback: n
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const diagnostics = vscode.window.createOutputChannel('Copilot AI Customization Visualizer');
-	const scanner = new WorkspaceScanner(diagnostics);
-	const provider = new AgentVisualizerViewProvider(context, scanner);
+	const output = vscode.window.createOutputChannel('Copilot AI Customization Visualizer');
+	const diagnostics = vscode.languages.createDiagnosticCollection('aivisualizer');
+	const scanner = new WorkspaceScanner(output);
+	const provider = new AgentVisualizerViewProvider(context, scanner, diagnostics);
 	const fileWatchers = createGraphFileWatchers(provider);
 
 	context.subscriptions.push(
+		output,
 		diagnostics,
 		vscode.window.registerWebviewViewProvider(viewType, provider),
 		vscode.commands.registerCommand('aivisualizer.refresh', () => provider.refresh()),
@@ -193,7 +201,17 @@ function createGraphFileWatchers(provider: AgentVisualizerViewProvider): vscode.
 }
 
 class WorkspaceScanner {
-	constructor(private readonly diagnostics: vscode.OutputChannel) {}
+	private readonly readProblems = new Map<string, ReadProblem>();
+
+	constructor(private readonly output: vscode.OutputChannel) {}
+
+	beginRefresh(): void {
+		this.readProblems.clear();
+	}
+
+	getReadProblems(): ReadProblem[] {
+		return [...this.readProblems.values()];
+	}
 
 	async scan(): Promise<WorkspaceAiFile[]> {
 		const [markdownUris, skillUris, instructionUris] = await Promise.all([
@@ -320,8 +338,9 @@ class WorkspaceScanner {
 		const relativePath = vscode.workspace.asRelativePath(uri, false);
 		const details = error instanceof Error ? error.message : String(error);
 
-		this.diagnostics.appendLine(`[${new Date().toISOString()}] ${message}: ${relativePath}`);
-		this.diagnostics.appendLine(details);
+		this.output.appendLine(`[${new Date().toISOString()}] ${message}: ${relativePath}`);
+		this.output.appendLine(details);
+		this.readProblems.set(uri.toString(), { uri, message, details });
 	}
 }
 
@@ -335,6 +354,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	constructor(
 		private readonly context: vscode.ExtensionContext,
 		private readonly scanner: WorkspaceScanner,
+		private readonly diagnostics: vscode.DiagnosticCollection,
 	) {}
 
 	private get extensionUri(): vscode.Uri {
@@ -469,11 +489,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		try {
+			this.scanner.beginRefresh();
 			const [files, mcpServers, hookConfigs] = await Promise.all([this.scanner.scan(), this.scanner.scanMcpServers(), this.scanner.scanHookConfigs()]);
 			const graph = mapWorkspaceFilesToGraph(files, mcpServers, hookConfigs);
 			graph.availableTools = this.getAvailableTools(graph);
 			graph.availableModels = await this.getAvailableModels(graph);
 			this.cachedGraph = graph;
+			this.updateDiagnostics(files, graph, this.scanner.getReadProblems());
 
 			await this.postCachedGraph();
 		} catch (error) {
@@ -481,6 +503,74 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				type: 'graph:error',
 				message: error instanceof Error ? error.message : String(error),
 			});
+		}
+	}
+
+	private updateDiagnostics(files: WorkspaceAiFile[], graph: GraphJson, readProblems: ReadProblem[]): void {
+		const diagnosticsByUri = new Map<string, { uri: vscode.Uri; diagnostics: vscode.Diagnostic[] }>();
+
+		const addDiagnostic = (uriValue: string, message: string, severity = vscode.DiagnosticSeverity.Warning) => {
+			const uri = vscode.Uri.parse(uriValue);
+			const key = uri.toString();
+			const entry = diagnosticsByUri.get(key) || { uri, diagnostics: [] };
+			const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message, severity);
+
+			diagnostic.source = 'AI Customization Visualizer';
+			entry.diagnostics.push(diagnostic);
+			diagnosticsByUri.set(key, entry);
+		};
+
+		for (const problem of readProblems) {
+			const message = problem.details ? `${problem.message}: ${problem.details}` : problem.message;
+
+			addDiagnostic(problem.uri.toString(), message, vscode.DiagnosticSeverity.Error);
+		}
+
+		for (const file of files) {
+			if ((file.kind === 'agent' || file.kind === 'prompt' || file.kind === 'skill') && !readString(file.frontmatter.name)) {
+				addDiagnostic(file.uri, `${capitalize(file.kind)} file is missing a name in frontmatter.`, vscode.DiagnosticSeverity.Error);
+			}
+		}
+
+		for (const node of graph.nodes) {
+			if (node.type === 'skill' && node.uri && node.skillIssues?.length) {
+				for (const issue of node.skillIssues) {
+					addDiagnostic(node.uri, issue, vscode.DiagnosticSeverity.Error);
+				}
+			}
+		}
+
+		const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
+		const unresolvedMessages = new Set<string>();
+
+		for (const link of graph.links) {
+			const target = nodeById.get(link.target);
+
+			if (!target?.unresolved || target.type !== 'agent') {
+				continue;
+			}
+
+			const source = nodeById.get(link.source);
+			const uri = source?.uri;
+
+			if (!uri) {
+				continue;
+			}
+
+			const key = `${uri}:${target.id}`;
+
+			if (unresolvedMessages.has(key)) {
+				continue;
+			}
+
+			unresolvedMessages.add(key);
+			addDiagnostic(uri, `Unresolved agent reference: ${target.label}.`, vscode.DiagnosticSeverity.Error);
+		}
+
+		this.diagnostics.clear();
+
+		for (const entry of diagnosticsByUri.values()) {
+			this.diagnostics.set(entry.uri, entry.diagnostics);
 		}
 	}
 
@@ -1166,6 +1256,26 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			padding: 5px 10px;
 			background: color-mix(in srgb, var(--vscode-sideBar-background) 80%, transparent);
 			pointer-events: none;
+		}
+
+		.layout-control {
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			margin-left: auto;
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+			pointer-events: auto;
+		}
+
+		.layout-control select {
+			min-width: 112px;
+			border: 1px solid var(--vscode-dropdown-border, var(--panel-border));
+			border-radius: 4px;
+			padding: 2px 5px;
+			color: var(--vscode-dropdown-foreground);
+			background: var(--vscode-dropdown-background);
+			font: inherit;
 		}
 
 		.graph svg {
@@ -2344,6 +2454,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const agentDescriptionPlaceholder = ${JSON.stringify(agentDescriptionPlaceholder)};
 		const agentBodyPlaceholder = ${JSON.stringify(agentBodyPlaceholder)};
 		const vscode = acquireVsCodeApi();
+		const savedWebviewState = vscode.getState?.() || {};
 		const contentShell = document.getElementById('content-shell');
 		const workspacePanels = document.getElementById('workspace-panels');
 		const nodeSizeInput = document.getElementById('node-size');
@@ -2377,10 +2488,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let sideBySideLayout = Boolean(initialViewSettings.sideBySideLayout);
 		let documentationLinksHidden = Boolean(initialViewSettings.documentationLinksHidden);
 		let visualizerColors = { ...(initialViewSettings.colors || {}) };
+		let graphLayoutAlgorithm = isGraphLayoutAlgorithm(savedWebviewState.graphLayoutAlgorithm) ? savedWebviewState.graphLayoutAlgorithm : 'hierarchical';
 		const colorPickerFallbackColors = ${JSON.stringify(colorPickerFallbackColors)};
 		let graphZoom = 1;
 		let graphPanX = 0;
 		let graphPanY = 0;
+		let graphShouldCenterOnNextRender = true;
 		let toolFilterValue = '';
 		let toolFilterTimeout;
 		let resizeTimeout;
@@ -2506,6 +2619,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			nodeScale = Number(nodeSizeInput.value) || 1;
 			nodeSizeValue.textContent = Math.round(nodeScale * 100) + '%';
 			persistCurrentSettings();
+			graphShouldCenterOnNextRender = true;
 
 			if (activeGraph) {
 				renderGraph(activeGraph, true);
@@ -2607,6 +2721,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			if (message.type === 'graph:update') {
 				setGraphLoading(false);
+				graphShouldCenterOnNextRender = true;
 				renderGraph(message.graph);
 			}
 
@@ -2614,6 +2729,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				setGraphLoading(false);
 				setStatus(message.message);
 				graphElement.innerHTML = renderGraphOverlay();
+				installGraphOverlayControls();
 				renderEditor(undefined);
 			}
 
@@ -2720,7 +2836,33 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderGraphOverlay() {
-			return '<div class="graph-overlay"><div id="status" class="status">' + escapeHtml(currentGraphStatus) + '</div><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div></div>';
+			return '<div class="graph-overlay"><div id="status" class="status">' + escapeHtml(currentGraphStatus) + '</div><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div><label class="layout-control">Layout<select id="layout-algorithm"><option value="hierarchical"' + (graphLayoutAlgorithm === 'hierarchical' ? ' selected' : '') + '>Hierarchical</option><option value="radial"' + (graphLayoutAlgorithm === 'radial' ? ' selected' : '') + '>Radial</option><option value="force"' + (graphLayoutAlgorithm === 'force' ? ' selected' : '') + '>Force-directed</option></select></label></div>';
+		}
+
+		function installGraphOverlayControls() {
+			const layoutSelect = document.getElementById('layout-algorithm');
+
+			if (!layoutSelect) {
+				return;
+			}
+
+			layoutSelect.addEventListener('change', () => {
+				if (!isGraphLayoutAlgorithm(layoutSelect.value)) {
+					return;
+				}
+
+				graphLayoutAlgorithm = layoutSelect.value;
+				vscode.setState?.({ ...(vscode.getState?.() || {}), graphLayoutAlgorithm });
+				graphShouldCenterOnNextRender = true;
+
+				if (activeGraph) {
+					renderGraph(activeGraph, true);
+				}
+			});
+		}
+
+		function isGraphLayoutAlgorithm(value) {
+			return value === 'hierarchical' || value === 'radial' || value === 'force';
 		}
 
 		function setGraphLoading(loading, label = 'Growing visualization...') {
@@ -2745,6 +2887,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			if (graph.nodes.length === 0) {
 				graphElement.innerHTML = renderGraphOverlay() + '<div class="empty">No .agent.md or .prompt.md files found.</div>';
+				installGraphOverlayControls();
 				renderEditor(undefined);
 				return;
 			}
@@ -2752,10 +2895,16 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const viewportWidth = Math.max(320, graphElement.clientWidth || 320);
 			const layoutWidth = getGraphLayoutWidth(graph, viewportWidth);
 			const positions = layoutGraph(graph, layoutWidth);
-			const maxY = Math.max(...[...positions.values()].map(position => position.y));
+			const graphBounds = getGraphPositionBounds(positions);
 			const viewportHeight = getGraphViewportHeight();
-			const contentHeight = Math.max(viewportHeight, maxY + 92 * nodeScale);
+			const contentHeight = Math.max(viewportHeight, graphBounds.maxY + 92 * nodeScale);
 			graphElement.style.height = viewportHeight + 'px';
+
+			if (graphShouldCenterOnNextRender) {
+				centerGraphPanOnBounds(viewportWidth, viewportHeight, layoutWidth, contentHeight, graphBounds);
+				graphShouldCenterOnNextRender = false;
+			}
+
 			clampGraphPan(viewportWidth, viewportHeight, layoutWidth, contentHeight);
 			const currentSelectionExists = graph.nodes.some(node => node.id === selectedNodeId);
 
@@ -2854,6 +3003,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}).join('');
 
 			graphElement.innerHTML = renderGraphOverlay() + '<svg width="100%" height="' + viewportHeight + '" viewBox="' + getGraphViewBox(viewportWidth, viewportHeight) + '" role="img" aria-label="Copilot AI customization graph">' + edges + nodes + '</svg>';
+			installGraphOverlayControls();
 			installGraphNavigation(graphElement.querySelector('svg'), viewportWidth, viewportHeight, layoutWidth, contentHeight);
 
 			for (const nodeElement of graphElement.querySelectorAll('.node')) {
@@ -2868,6 +3018,16 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function getGraphLayoutWidth(graph, viewportWidth) {
+			if (graphLayoutAlgorithm === 'radial') {
+				const radius = Math.max(120 * nodeScale, graph.nodes.length * 13 * nodeScale);
+
+				return Math.max(viewportWidth, radius * 2 + 140 * nodeScale);
+			}
+
+			if (graphLayoutAlgorithm === 'force') {
+				return Math.max(viewportWidth, Math.ceil(Math.sqrt(graph.nodes.length)) * 170 * nodeScale);
+			}
+
 			const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
 			const childrenById = new Map(graph.nodes.map(node => [node.id, []]));
 			const incoming = new Map(graph.nodes.map(node => [node.id, 0]));
@@ -2954,11 +3114,41 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function clampGraphPan(width, height, layoutWidth, contentHeight) {
+			if (!Number.isFinite(graphPanX)) {
+				graphPanX = 0;
+			}
+
+			if (!Number.isFinite(graphPanY)) {
+				graphPanY = 0;
+			}
+		}
+
+		function centerGraphPanOnBounds(width, height, layoutWidth, contentHeight, bounds) {
 			const viewWidth = width / graphZoom;
 			const viewHeight = height / graphZoom;
+			const centerX = (bounds.minX + bounds.maxX) / 2;
+			const centerY = (bounds.minY + bounds.maxY) / 2;
 
-			graphPanX = Math.min(Math.max(0, graphPanX), Math.max(0, layoutWidth - viewWidth));
-			graphPanY = Math.min(Math.max(0, graphPanY), Math.max(0, contentHeight - viewHeight));
+			graphPanX = centerX - viewWidth / 2;
+			graphPanY = centerY - viewHeight / 2;
+			clampGraphPan(width, height, layoutWidth, contentHeight);
+		}
+
+		function getGraphPositionBounds(positions) {
+			const values = [...positions.values()];
+
+			if (!values.length) {
+				return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+			}
+
+			const padding = 62 * nodeScale;
+
+			return {
+				minX: Math.min(...values.map(position => position.x)) - padding,
+				maxX: Math.max(...values.map(position => position.x)) + padding,
+				minY: Math.min(...values.map(position => position.y)) - padding,
+				maxY: Math.max(...values.map(position => position.y)) + padding,
+			};
 		}
 
 		function installGraphNavigation(svg, width, height, layoutWidth, contentHeight) {
@@ -3043,6 +3233,18 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function layoutGraph(graph, width) {
+			if (graphLayoutAlgorithm === 'radial') {
+				return layoutRadialGraph(graph, width);
+			}
+
+			if (graphLayoutAlgorithm === 'force') {
+				return layoutForceDirectedGraph(graph, width);
+			}
+
+			return layoutHierarchicalGraph(graph, width);
+		}
+
+		function layoutHierarchicalGraph(graph, width) {
 			const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
 			const childrenById = new Map(graph.nodes.map(node => [node.id, []]));
 			const incoming = new Map(graph.nodes.map(node => [node.id, 0]));
@@ -3129,6 +3331,115 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 						y: topPadding + level * verticalGap,
 					});
 				});
+			}
+
+			return positions;
+		}
+
+		function layoutRadialGraph(graph, width) {
+			const positions = new Map();
+			const orderedNodes = [...graph.nodes].sort(compareNodes);
+			const centerX = width / 2;
+			const centerY = Math.max(180 * nodeScale, orderedNodes.length * 11 * nodeScale);
+			const radius = Math.max(110 * nodeScale, orderedNodes.length * 11 * nodeScale);
+			const centerCandidates = orderedNodes.filter(node => node.type === 'agent' && node.uri && node.userInvocable !== false);
+			const centerNode = centerCandidates[0] || orderedNodes.find(node => node.type === 'agent') || orderedNodes[0];
+			const ringNodes = orderedNodes.filter(node => node !== centerNode);
+
+			if (centerNode) {
+				positions.set(centerNode.id, { x: centerX, y: centerY });
+			}
+
+			ringNodes.forEach((node, index) => {
+				const angle = (Math.PI * 2 * index / Math.max(1, ringNodes.length)) - Math.PI / 2;
+
+				positions.set(node.id, {
+					x: centerX + Math.cos(angle) * radius,
+					y: centerY + Math.sin(angle) * radius,
+				});
+			});
+
+			return positions;
+		}
+
+		function layoutForceDirectedGraph(graph, width) {
+			const positions = new Map();
+			const velocities = new Map();
+			const orderedNodes = [...graph.nodes].sort(compareNodes);
+			const height = Math.max(360 * nodeScale, Math.ceil(Math.sqrt(Math.max(1, orderedNodes.length))) * 160 * nodeScale);
+			const centerX = width / 2;
+			const centerY = height / 2;
+			const initialRadius = Math.min(width, height) * 0.34;
+			const repulsion = 3600 * nodeScale;
+			const springLength = 105 * nodeScale;
+			const springStrength = 0.018;
+
+			orderedNodes.forEach((node, index) => {
+				const angle = Math.PI * 2 * index / Math.max(1, orderedNodes.length);
+
+				positions.set(node.id, {
+					x: centerX + Math.cos(angle) * initialRadius,
+					y: centerY + Math.sin(angle) * initialRadius,
+				});
+				velocities.set(node.id, { x: 0, y: 0 });
+			});
+
+			for (let iteration = 0; iteration < 120; iteration += 1) {
+				for (let leftIndex = 0; leftIndex < orderedNodes.length; leftIndex += 1) {
+					for (let rightIndex = leftIndex + 1; rightIndex < orderedNodes.length; rightIndex += 1) {
+						const left = orderedNodes[leftIndex];
+						const right = orderedNodes[rightIndex];
+						const leftPosition = positions.get(left.id);
+						const rightPosition = positions.get(right.id);
+						const leftVelocity = velocities.get(left.id);
+						const rightVelocity = velocities.get(right.id);
+						const deltaX = leftPosition.x - rightPosition.x;
+						const deltaY = leftPosition.y - rightPosition.y;
+						const distanceSquared = Math.max(100, deltaX * deltaX + deltaY * deltaY);
+						const force = repulsion / distanceSquared;
+						const distance = Math.sqrt(distanceSquared);
+						const forceX = deltaX / distance * force;
+						const forceY = deltaY / distance * force;
+
+						leftVelocity.x += forceX;
+						leftVelocity.y += forceY;
+						rightVelocity.x -= forceX;
+						rightVelocity.y -= forceY;
+					}
+				}
+
+				for (const link of graph.links) {
+					const source = positions.get(link.source);
+					const target = positions.get(link.target);
+					const sourceVelocity = velocities.get(link.source);
+					const targetVelocity = velocities.get(link.target);
+
+					if (!source || !target || !sourceVelocity || !targetVelocity) {
+						continue;
+					}
+
+					const deltaX = target.x - source.x;
+					const deltaY = target.y - source.y;
+					const distance = Math.max(1, Math.sqrt(deltaX * deltaX + deltaY * deltaY));
+					const force = (distance - springLength) * springStrength;
+					const forceX = deltaX / distance * force;
+					const forceY = deltaY / distance * force;
+
+					sourceVelocity.x += forceX;
+					sourceVelocity.y += forceY;
+					targetVelocity.x -= forceX;
+					targetVelocity.y -= forceY;
+				}
+
+				for (const node of orderedNodes) {
+					const position = positions.get(node.id);
+					const velocity = velocities.get(node.id);
+
+					velocity.x = (velocity.x + (centerX - position.x) * 0.002) * 0.82;
+					velocity.y = (velocity.y + (centerY - position.y) * 0.002) * 0.82;
+					position.x = Math.min(width - 60 * nodeScale, Math.max(60 * nodeScale, position.x + velocity.x));
+					position.y = Math.min(height - 60 * nodeScale, Math.max(70 * nodeScale, position.y + velocity.y));
+				}
 			}
 
 			return positions;
@@ -4112,6 +4423,10 @@ function normalizeObject(value: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
 	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function capitalize(value: string): string {
+	return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function readModel(value: unknown): string | undefined {
