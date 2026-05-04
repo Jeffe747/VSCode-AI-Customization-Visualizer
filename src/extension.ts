@@ -959,35 +959,47 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const displayName = readString(message.name);
 
 		if (!workspaceFolder) {
-			await this.postError('Unable to create: open a workspace folder first.');
+			await this.postSaveError('Unable to create: open a workspace folder first.');
 			return;
 		}
 
 		if (!kind) {
-			await this.postError('Unable to create: choose Instruction Agent Prompt Skill or Hook.');
+			await this.postSaveError('Unable to create: choose Instruction Agent Prompt Skill or Hook.');
 			return;
 		}
 
 		if (!displayName) {
-			await this.postError('Unable to create: enter a name.');
+			await this.postSaveError('Unable to create: enter a name.');
 			return;
 		}
 
 		const baseFolderUri = getCustomizationFolderUri(workspaceFolder.uri, kind, instructionType);
 		const folderUri = kind === 'skill' ? vscode.Uri.joinPath(baseFolderUri, getSkillFolderName(displayName)) : baseFolderUri;
 		const uri = vscode.Uri.joinPath(folderUri, getCustomizationFileName(kind, displayName, instructionType));
+		const folderStat = await getFileStat(folderUri);
 
 		if (await fileExists(uri)) {
-			await this.postError(`Unable to create: ${vscode.workspace.asRelativePath(uri, false)} already exists.`);
+			await this.postSaveError(`Unable to create: ${vscode.workspace.asRelativePath(uri, false)} already exists.`);
 			return;
 		}
 
-		await vscode.workspace.fs.createDirectory(folderUri);
-		const content = kind === 'hook' ? createHookCustomizationJson(displayName) : createCustomizationMarkdown(kind, displayName, instructionType);
+		if (folderStat && !(folderStat.type & vscode.FileType.Directory)) {
+			await this.postSaveError(`Unable to create: ${vscode.workspace.asRelativePath(folderUri, false)} already exists and is not a folder.`);
+			return;
+		}
 
-		await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
-		await this.openNode(uri.toString());
-		this.refresh();
+		try {
+			await vscode.workspace.fs.createDirectory(folderUri);
+			const content = kind === 'hook' ? createHookCustomizationJson(displayName) : createCustomizationMarkdown(kind, displayName, instructionType);
+
+			await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+			await this.openNode(uri.toString());
+			this.refresh();
+		} catch (error) {
+			const details = error instanceof Error ? error.message : String(error);
+
+			await this.postSaveError(`Unable to create: ${details}`);
+		}
 	}
 
 	private parseWorkspaceUri(value: unknown): vscode.Uri | undefined {
@@ -1495,6 +1507,56 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.content-shell {
 			position: relative;
+		}
+
+		.error-toast {
+			position: fixed;
+			right: 14px;
+			bottom: 14px;
+			z-index: 30;
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto;
+			align-items: start;
+			gap: 10px;
+			box-sizing: border-box;
+			width: min(420px, calc(100vw - 28px));
+			border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 58%, var(--panel-border));
+			border-radius: 6px;
+			padding: 10px 10px 10px 12px;
+			color: var(--vscode-sideBar-foreground);
+			background: color-mix(in srgb, var(--vscode-editorWidget-background) 94%, var(--vscode-errorForeground));
+			box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+			font-size: 12px;
+			line-height: 1.35;
+		}
+
+		.error-toast[hidden] {
+			display: none;
+		}
+
+		.error-toast-message {
+			min-width: 0;
+			overflow-wrap: anywhere;
+		}
+
+		.error-toast-close {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 22px;
+			height: 22px;
+			border: 1px solid var(--panel-border);
+			border-radius: 4px;
+			padding: 0;
+			color: var(--vscode-sideBar-foreground);
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 88%, var(--vscode-errorForeground));
+			font: inherit;
+			line-height: 1;
+			cursor: pointer;
+		}
+
+		.error-toast-close:hover {
+			border-color: var(--vscode-errorForeground);
 		}
 
 		.workspace-panels.side-by-side.has-editor {
@@ -2704,6 +2766,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			<section id="editor" class="editor" hidden aria-live="polite"></section>
 		</div>
 	</div>
+	<div id="error-toast" class="error-toast" role="alert" aria-live="assertive" hidden><div id="error-toast-message" class="error-toast-message"></div><button id="error-toast-close" class="error-toast-close" type="button" title="Dismiss error" aria-label="Dismiss error">x</button></div>
 	<script nonce="${nonce}">
 		const isWindowModeView = ${isWindowModeView ? 'true' : 'false'};
 		const settingsMode = isWindowModeView ? 'window' : 'activity';
@@ -2729,6 +2792,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const docsInfo = document.getElementById('docs-info');
 		const graphElement = document.getElementById('graph');
 		const editorElement = document.getElementById('editor');
+		const errorToast = document.getElementById('error-toast');
+		const errorToastMessage = document.getElementById('error-toast-message');
+		const errorToastClose = document.getElementById('error-toast-close');
 		const inactiveOverlay = document.getElementById('inactive-overlay');
 		const windowModeButton = document.getElementById('popout');
 		const aboutDialogBackdrop = document.getElementById('about-dialog-backdrop');
@@ -2863,6 +2929,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		});
 
 		document.getElementById('close-about').addEventListener('click', closeAboutDialog);
+		errorToastClose.addEventListener('click', hideErrorToast);
 
 		aboutDialogBackdrop.addEventListener('click', event => {
 			if (event.target === aboutDialogBackdrop) {
@@ -3019,6 +3086,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (event.key === 'Escape' && !settingsDialogBackdrop.hidden) {
 				closeSettingsDialog();
 			}
+
+			if (event.key === 'Escape' && !errorToast.hidden) {
+				hideErrorToast();
+			}
 		});
 
 		window.addEventListener('resize', () => {
@@ -3047,6 +3118,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (message.type === 'graph:error') {
 				setGraphLoading(false);
 				setStatus(message.message);
+				showErrorToast(message.message);
 				graphElement.innerHTML = renderGraphOverlay();
 				installGraphOverlayControls();
 				renderEditor(undefined);
@@ -3055,6 +3127,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (message.type === 'save:error') {
 				setGraphLoading(false);
 				setStatus(message.message);
+				showErrorToast(message.message);
 			}
 
 			if (message.type === 'graph:loading') {
@@ -3197,6 +3270,16 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (statusElement) {
 				statusElement.textContent = message;
 			}
+		}
+
+		function showErrorToast(message) {
+			errorToastMessage.textContent = message;
+			errorToast.hidden = false;
+		}
+
+		function hideErrorToast() {
+			errorToast.hidden = true;
+			errorToastMessage.textContent = '';
 		}
 
 		function renderGraphOverlay() {
@@ -5496,11 +5579,14 @@ function getSkillFolderName(displayName: string): string {
 }
 
 async function fileExists(uri: vscode.Uri): Promise<boolean> {
+	return Boolean(await getFileStat(uri));
+}
+
+async function getFileStat(uri: vscode.Uri): Promise<vscode.FileStat | undefined> {
 	try {
-		await vscode.workspace.fs.stat(uri);
-		return true;
+		return await vscode.workspace.fs.stat(uri);
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 

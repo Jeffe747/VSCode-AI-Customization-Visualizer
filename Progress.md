@@ -2,6 +2,8 @@
 # Tasks
 
 # Done
+- Made webview error messages appear as dismissable toast notifications.
+- Validated new customization file creation before writing so duplicate names and path conflicts show a non-destructive user error.
 - Moved the visualizer node and edge count to the bottom-left corner with smaller text.
 - Split the Layout settings container into aligned Toggles and Sizing subsections.
 - Hid the Token heatmap and Identify orphans graph toggles by default and added settings checkboxes to show them when needed.
