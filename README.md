@@ -14,6 +14,8 @@ Copilot AI Customization Visualizer has been AI-engineered with GPT-5.5
 
 Open the `Copilot AI Customization Visualizer` activity bar view to inspect the current workspace. Select a node to edit its metadata and system prompt, then use `Save` or `Ctrl+S` to write changes back to the source file.
 
+Zoom in the visuaizer with `Ctrl+Scrollwheel`. Drag around with the mouse.
+
 Use the toolbar settings button to adjust graph element size and editor text size.
 
 ## Contributing to development
