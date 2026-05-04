@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import matter = require('gray-matter');
 import * as vscode from 'vscode';
-import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, isToolChoiceVisibleForFilter, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
+import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, isToolChoiceVisibleForFilter, normalizePostedHandoffs, parseHandoffsInput, parseLines, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
 import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 
 suite('Extension Test Suite', () => {
@@ -155,6 +155,22 @@ suite('Extension Test Suite', () => {
 		assert.strictEqual(graph.nodes.filter(node => node.type === 'handoff' && node.label === 'Test1').length, 2);
 		assert.ok(graph.links.some(link => link.source === 'agent:planning' && link.target === 'handoff:Planning.agent.md:0' && link.type === 'uses-handoff'));
 		assert.ok(graph.links.some(link => link.source === 'agent:review' && link.target === 'handoff:Review.agent.md:0' && link.type === 'uses-handoff'));
+	});
+
+	test('maps legacy handoff editor property names into graph nodes', () => {
+		const graph = mapWorkspaceFilesToGraph([
+			createAgent('Planning', [], [], '', undefined, undefined, undefined, undefined, [{ name: 'Proceed', handoffAgent: 'ProjectOrchestrator', handoffPrompt: 'Continue the work.', handoffSend: false, handoffModel: 'Auto (copilot)' }]),
+			createAgent('ProjectOrchestrator'),
+		]);
+		const node = graph.nodes.find(node => node.id === 'handoff:Planning.agent.md:0');
+
+		assert.ok(node);
+		assert.strictEqual(node.label, 'Proceed');
+		assert.strictEqual(node.handoffAgent, 'ProjectOrchestrator');
+		assert.strictEqual(node.handoffPrompt, 'Continue the work.');
+		assert.strictEqual(node.handoffSend, false);
+		assert.strictEqual(node.handoffModel, 'Auto (copilot)');
+		assert.ok(graph.links.some(link => link.source === 'handoff:Planning.agent.md:0' && link.target === 'agent:projectorchestrator' && link.type === 'handoff-to-agent'));
 	});
 
 	test('maps hook configs as visible nodes with event summaries', () => {
@@ -389,6 +405,30 @@ suite('Extension Test Suite', () => {
 	test('keeps hidden filtered tool rows from overriding display none', () => {
 		assert.match(toolChoiceHiddenCssRule, /\.tool-choice-list\s+\.choice-check\[hidden\]/);
 		assert.match(toolChoiceHiddenCssRule, /display:\s*none/);
+	});
+
+	test('parses comma newline and array line inputs into unique trimmed values', () => {
+		assert.deepStrictEqual(parseLines(' search, read\nread\n custom-tool '), ['search', 'read', 'custom-tool']);
+		assert.deepStrictEqual(parseLines([' search ', 'read', 'read', 7]), ['search', 'read']);
+		assert.deepStrictEqual(parseLines({ tools: ['read'] }), []);
+	});
+
+	test('parses handoff JSON input only when it is an array', () => {
+		assert.deepStrictEqual(parseHandoffsInput(''), { ok: true, value: [] });
+		assert.deepStrictEqual(parseHandoffsInput('[{"label":"Proceed","agent":"agent","prompt":"Go","send":false}]'), { ok: true, value: [{ label: 'Proceed', agent: 'agent', prompt: 'Go', send: false }] });
+		assert.deepStrictEqual(parseHandoffsInput('{"label":"Proceed"}'), { ok: false });
+		assert.deepStrictEqual(parseHandoffsInput('['), { ok: false });
+	});
+
+	test('normalizes posted handoffs from canonical and editor property names', () => {
+		assert.deepStrictEqual(normalizePostedHandoffs([
+			{ label: ' Proceed ', agent: ' agent ', prompt: ' Go ', send: false, model: ['Auto (copilot)', 'GPT-5 (copilot)'] },
+			{ name: 'Review', handoffAgent: 'Reviewer', handoffPrompt: 'Review this.', handoffSend: true, handoffModel: 'Claude (copilot)' },
+			{ send: true },
+		]), [
+			{ send: false, label: 'Proceed', agent: 'agent', prompt: 'Go', model: 'Auto (copilot), GPT-5 (copilot)' },
+			{ send: true, label: 'Review', agent: 'Reviewer', prompt: 'Review this.', model: 'Claude (copilot)' },
+		]);
 	});
 
 	test('saves handoff model inside handoff frontmatter item', () => {

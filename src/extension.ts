@@ -13,19 +13,82 @@ const excludeGlob = '**/{node_modules,out,dist,.git}/**';
 const agentDescriptionPlaceholder = 'Use when: describe when this agent should be selected.';
 const agentBodyPlaceholder = "Describe this agent's role, workflow, constraints, and output style.";
 type VisualizerSettingsMode = 'activity' | 'window';
+type VisualizerColorKey = 'agent' | 'prompt' | 'skill' | 'instruction' | 'mcp' | 'hook' | 'hook-event' | 'handoff' | 'tool' | 'edge' | 'marker' | 'marker-background' | 'marker-accent' | 'selection' | 'graph-background';
+
+interface VisualizerColorDefinition {
+	key: VisualizerColorKey;
+	label: string;
+	description: string;
+}
 
 interface VisualizerSettings {
 	sideBySideLayout: boolean;
 	documentationLinksHidden: boolean;
 	nodeScale: number;
 	textScale: number;
+	colors: Partial<Record<VisualizerColorKey, string>>;
 }
+
+const visualizerColorDefinitions: VisualizerColorDefinition[] = [
+	{ key: 'instruction', label: 'Instructions', description: 'Instruction file areas' },
+	{ key: 'skill', label: 'Skills', description: 'Agent skill nodes' },
+	{ key: 'prompt', label: 'Prompts', description: 'Prompt file nodes' },
+	{ key: 'agent', label: 'Agents', description: 'Agent file nodes' },
+	{ key: 'handoff', label: 'Handoffs', description: 'Agent handoff nodes' },
+	{ key: 'mcp', label: 'MCP', description: 'MCP server nodes' },
+	{ key: 'hook', label: 'Hooks', description: 'Hook file nodes' },
+	{ key: 'hook-event', label: 'Hook events', description: 'Hook event sub-nodes' },
+	{ key: 'tool', label: 'Tools', description: 'Tool references when shown' },
+	{ key: 'edge', label: 'Edges', description: 'Graph lines and arrows' },
+	{ key: 'marker', label: 'Icons', description: 'Robot, skill, MCP, and hook icon strokes' },
+	{ key: 'marker-background', label: 'Icon backing', description: 'Icon badge fills and cutouts' },
+	{ key: 'marker-accent', label: 'Icon accent', description: 'Stars and highlighted icon details' },
+	{ key: 'selection', label: 'Selection', description: 'Selected and hovered node borders' },
+	{ key: 'graph-background', label: 'Graph background', description: 'Visualizer canvas background' },
+];
+
+const visualizerDefaultCssValues: Record<VisualizerColorKey, string> = {
+	agent: 'var(--vscode-charts-red)',
+	prompt: 'var(--vscode-charts-green)',
+	skill: 'var(--vscode-charts-blue)',
+	instruction: 'var(--vscode-charts-purple)',
+	mcp: 'var(--vscode-charts-yellow)',
+	hook: 'var(--vscode-charts-foreground, var(--vscode-charts-blue))',
+	'hook-event': 'var(--hook)',
+	handoff: 'var(--vscode-charts-orange)',
+	tool: 'var(--vscode-charts-orange)',
+	edge: 'var(--vscode-descriptionForeground)',
+	marker: '#000000',
+	'marker-background': '#ffffff',
+	'marker-accent': 'var(--vscode-charts-yellow, #f2c744)',
+	selection: 'var(--vscode-focusBorder)',
+	'graph-background': 'color-mix(in srgb, var(--vscode-sideBar-background) 92%, var(--vscode-sideBar-foreground))',
+};
+
+const colorPickerFallbackColors: Record<VisualizerColorKey, string> = {
+	agent: '#d84f4f',
+	prompt: '#4aa36b',
+	skill: '#4f8bd8',
+	instruction: '#8c6bd8',
+	mcp: '#d8b84f',
+	hook: '#9aa0a6',
+	'hook-event': '#9aa0a6',
+	handoff: '#d88a4f',
+	tool: '#d88a4f',
+	edge: '#8f96a3',
+	marker: '#000000',
+	'marker-background': '#ffffff',
+	'marker-accent': '#f2c744',
+	selection: '#66afe9',
+	'graph-background': '#20242b',
+};
 
 const defaultVisualizerSettings: VisualizerSettings = {
 	sideBySideLayout: false,
 	documentationLinksHidden: false,
 	nodeScale: 1.1,
 	textScale: 1,
+	colors: {},
 };
 
 const visualizerSettingsStorageKeys: Record<VisualizerSettingsMode, string> = {
@@ -51,7 +114,37 @@ function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
 		documentationLinksHidden: typeof record.documentationLinksHidden === 'boolean' ? record.documentationLinksHidden : defaultVisualizerSettings.documentationLinksHidden,
 		nodeScale: readNumberInRange(record.nodeScale, 0.85, 2, defaultVisualizerSettings.nodeScale),
 		textScale: readNumberInRange(record.textScale, 0.75, 1.6, defaultVisualizerSettings.textScale),
+		colors: normalizeVisualizerColors(record.colors),
 	};
+}
+
+function normalizeVisualizerColors(value: unknown): Partial<Record<VisualizerColorKey, string>> {
+	const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+	const colors: Partial<Record<VisualizerColorKey, string>> = {};
+
+	for (const definition of visualizerColorDefinitions) {
+		const color = readHexColor(record[definition.key]);
+
+		if (color && color.toLowerCase() !== colorPickerFallbackColors[definition.key].toLowerCase() && !isLegacyColorPickerFallback(definition.key, color)) {
+			colors[definition.key] = color;
+		}
+	}
+
+	return colors;
+}
+
+function readHexColor(value: unknown): string | undefined {
+	return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : undefined;
+}
+
+function isLegacyColorPickerFallback(key: VisualizerColorKey, color: string): boolean {
+	const legacyFallbacks: Partial<Record<VisualizerColorKey, string>> = {
+		marker: '#f2f4f8',
+		'marker-background': '#1f2329',
+	};
+	const legacyFallback = legacyFallbacks[key];
+
+	return Boolean(legacyFallback && legacyFallback.toLowerCase() === color.toLowerCase());
 }
 
 function readNumberInRange(value: unknown, min: number, max: number, fallback: number): number {
@@ -65,11 +158,13 @@ function readNumberInRange(value: unknown, min: number, max: number, fallback: n
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const scanner = new WorkspaceScanner();
+	const diagnostics = vscode.window.createOutputChannel('Copilot AI Customization Visualizer');
+	const scanner = new WorkspaceScanner(diagnostics);
 	const provider = new AgentVisualizerViewProvider(context, scanner);
 	const fileWatchers = createGraphFileWatchers(provider);
 
 	context.subscriptions.push(
+		diagnostics,
 		vscode.window.registerWebviewViewProvider(viewType, provider),
 		vscode.commands.registerCommand('aivisualizer.refresh', () => provider.refresh()),
 		vscode.commands.registerCommand('aivisualizer.popout', () => void provider.toggleWindowMode()),
@@ -98,6 +193,8 @@ function createGraphFileWatchers(provider: AgentVisualizerViewProvider): vscode.
 }
 
 class WorkspaceScanner {
+	constructor(private readonly diagnostics: vscode.OutputChannel) {}
+
 	async scan(): Promise<WorkspaceAiFile[]> {
 		const [markdownUris, skillUris, instructionUris] = await Promise.all([
 			vscode.workspace.findFiles(markdownGlob, excludeGlob),
@@ -141,7 +238,8 @@ class WorkspaceScanner {
 				const command = readString(server.url) || readString(server.command);
 				return { name, source, serverType, command };
 			});
-		} catch {
+		} catch (error) {
+			this.logReadError(uri, 'Unable to read MCP server configuration', error);
 			return [];
 		}
 	}
@@ -171,7 +269,8 @@ class WorkspaceScanner {
 				events,
 				commands,
 			};
-		} catch {
+		} catch (error) {
+			this.logReadError(uri, 'Unable to read hook configuration', error);
 			return undefined;
 		}
 	}
@@ -184,32 +283,45 @@ class WorkspaceScanner {
 			return undefined;
 		}
 
-		const bytes = await vscode.workspace.fs.readFile(uri);
-		const rawMarkdown = Buffer.from(bytes).toString('utf8');
-		const parsed = matter(rawMarkdown);
-		const frontmatter = normalizeFrontmatter(parsed.data);
-		const name = getFileName(uri, kind, frontmatter);
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			const rawMarkdown = Buffer.from(bytes).toString('utf8');
+			const parsed = matter(rawMarkdown);
+			const frontmatter = normalizeFrontmatter(parsed.data);
+			const name = getFileName(uri, kind, frontmatter);
 
-		return {
-			uri: uri.toString(),
-			relativePath,
-			kind,
-			name,
-			frontmatter,
-			body: parsed.content,
-			agents: kind === 'agent' ? readStringArray(frontmatter.agents) : [],
-			tools: kind === 'instruction' ? [] : unique([...readStringArray(frontmatter.tools), ...extractToolReferences(parsed.content)]),
-			model: readModel(frontmatter.model),
-			userInvocable: kind === 'agent' || kind === 'skill' ? readBoolean(frontmatter['user-invocable']) : undefined,
-			agent: kind === 'prompt' ? readString(frontmatter.agent) : undefined,
-			description: kind === 'agent' || kind === 'skill' || kind === 'instruction' ? readString(frontmatter.description) : undefined,
-			applyTo: kind === 'instruction' ? readString(frontmatter.applyTo) : undefined,
-			argumentHint: kind === 'agent' || kind === 'skill' ? readString(frontmatter['argument-hint']) : undefined,
-			disableModelInvocation: kind === 'agent' || kind === 'skill' ? readBoolean(frontmatter['disable-model-invocation']) : undefined,
-			handoffs: kind === 'agent' ? readArray(frontmatter.handoffs) : undefined,
-			skillContext: kind === 'skill' ? readSkillContext(frontmatter.context) : undefined,
-			skillFolderName: kind === 'skill' ? path.basename(path.dirname(uri.fsPath)) : undefined,
-		};
+			return {
+				uri: uri.toString(),
+				relativePath,
+				kind,
+				name,
+				frontmatter,
+				body: parsed.content,
+				agents: kind === 'agent' ? readStringArray(frontmatter.agents) : [],
+				tools: kind === 'instruction' ? [] : unique([...readStringArray(frontmatter.tools), ...extractToolReferences(parsed.content)]),
+				model: readModel(frontmatter.model),
+				userInvocable: kind === 'agent' || kind === 'skill' ? readBoolean(frontmatter['user-invocable']) : undefined,
+				agent: kind === 'prompt' ? readString(frontmatter.agent) : undefined,
+				description: kind === 'agent' || kind === 'skill' || kind === 'instruction' ? readString(frontmatter.description) : undefined,
+				applyTo: kind === 'instruction' ? readString(frontmatter.applyTo) : undefined,
+				argumentHint: kind === 'agent' || kind === 'skill' ? readString(frontmatter['argument-hint']) : undefined,
+				disableModelInvocation: kind === 'agent' || kind === 'skill' ? readBoolean(frontmatter['disable-model-invocation']) : undefined,
+				handoffs: kind === 'agent' ? readArray(frontmatter.handoffs) : undefined,
+				skillContext: kind === 'skill' ? readSkillContext(frontmatter.context) : undefined,
+				skillFolderName: kind === 'skill' ? path.basename(path.dirname(uri.fsPath)) : undefined,
+			};
+		} catch (error) {
+			this.logReadError(uri, `Unable to read ${kind} customization file`, error);
+			return undefined;
+		}
+	}
+
+	private logReadError(uri: vscode.Uri, message: string, error: unknown): void {
+		const relativePath = vscode.workspace.asRelativePath(uri, false);
+		const details = error instanceof Error ? error.message : String(error);
+
+		this.diagnostics.appendLine(`[${new Date().toISOString()}] ${message}: ${relativePath}`);
+		this.diagnostics.appendLine(details);
 	}
 }
 
@@ -760,6 +872,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	private getHtml(webview: vscode.Webview, isWindowModeView: boolean): string {
 		const nonce = getNonce();
 		const settings = this.getVisualizerSettings(isWindowModeView ? 'window' : 'activity');
+		const colorPickerControls = visualizerColorDefinitions.map(definition => '<label class="color-control" title="' + definition.description + '"><span><strong>' + definition.label + '</strong><small>' + definition.description + '</small></span><input class="color-picker" type="color" data-color-key="' + definition.key + '" value="' + (settings.colors[definition.key] || colorPickerFallbackColors[definition.key]) + '"></label>').join('');
 
 		return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -772,14 +885,21 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		:root {
 			color-scheme: light dark;
 			--panel-border: color-mix(in srgb, var(--vscode-sideBar-foreground) 18%, transparent);
-			--agent: var(--vscode-charts-red);
-			--prompt: var(--vscode-charts-green);
-			--skill: var(--vscode-charts-blue);
-			--instruction: var(--vscode-charts-purple);
-			--mcp: var(--vscode-charts-yellow);
-			--hook: var(--vscode-charts-foreground, var(--vscode-charts-blue));
-			--handoff: var(--vscode-charts-orange);
-			--tool: var(--vscode-charts-orange);
+			--agent: ${settings.colors.agent || visualizerDefaultCssValues.agent};
+			--prompt: ${settings.colors.prompt || visualizerDefaultCssValues.prompt};
+			--skill: ${settings.colors.skill || visualizerDefaultCssValues.skill};
+			--instruction: ${settings.colors.instruction || visualizerDefaultCssValues.instruction};
+			--mcp: ${settings.colors.mcp || visualizerDefaultCssValues.mcp};
+			--hook: ${settings.colors.hook || visualizerDefaultCssValues.hook};
+			--hook-event: ${settings.colors['hook-event'] || visualizerDefaultCssValues['hook-event']};
+			--handoff: ${settings.colors.handoff || visualizerDefaultCssValues.handoff};
+			--tool: ${settings.colors.tool || visualizerDefaultCssValues.tool};
+			--edge: ${settings.colors.edge || visualizerDefaultCssValues.edge};
+			--marker: ${settings.colors.marker || visualizerDefaultCssValues.marker};
+			--marker-background: ${settings.colors['marker-background'] || visualizerDefaultCssValues['marker-background']};
+			--marker-accent: ${settings.colors['marker-accent'] || visualizerDefaultCssValues['marker-accent']};
+			--selection: ${settings.colors.selection || visualizerDefaultCssValues.selection};
+			--graph-background: ${settings.colors['graph-background'] || visualizerDefaultCssValues['graph-background']};
 		}
 
 		html {
@@ -1030,7 +1150,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			min-height: 320px;
 			border: 1px solid var(--panel-border);
 			border-radius: 6px;
-			background: color-mix(in srgb, var(--vscode-sideBar-background) 92%, var(--vscode-sideBar-foreground));
+			background: var(--graph-background);
 			overflow: hidden;
 		}
 
@@ -1448,6 +1568,101 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.24));
 		}
 
+		.settings-dialog {
+			box-sizing: border-box;
+			width: min(560px, calc(100vw - 24px));
+			max-height: calc(100vh - 68px);
+			padding: 12px;
+			overflow-y: auto;
+		}
+
+		.settings-dialog h3 {
+			margin-bottom: 10px;
+		}
+
+		.settings-section {
+			display: grid;
+			gap: 8px;
+			margin-bottom: 12px;
+			border: 1px solid var(--panel-border);
+			border-radius: 6px;
+			padding: 10px;
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--vscode-sideBar-foreground));
+		}
+
+		.settings-section h4 {
+			margin: 0;
+			color: var(--vscode-sideBar-foreground);
+			font-size: 12px;
+			font-weight: 600;
+		}
+
+		.settings-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+			gap: 8px 12px;
+		}
+
+		.settings-dialog .size-control,
+		.settings-dialog .settings-toggle {
+			width: 100%;
+			margin: 0;
+		}
+
+		.color-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+			gap: 8px;
+		}
+
+		.color-control {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) 34px;
+			align-items: center;
+			gap: 8px;
+			margin: 0;
+			border: 1px solid var(--panel-border);
+			border-radius: 5px;
+			padding: 7px 8px;
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 98%, var(--vscode-sideBar-foreground));
+		}
+
+		.color-control span {
+			min-width: 0;
+		}
+
+		.color-control strong,
+		.color-control small {
+			display: block;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.color-control strong {
+			color: var(--vscode-sideBar-foreground);
+			font-size: 11px;
+			font-weight: 600;
+		}
+
+		.color-control small {
+			margin-top: 2px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 10px;
+		}
+
+		.color-control input[type="color"] {
+			box-sizing: border-box;
+			width: 32px;
+			height: 28px;
+			margin: 0;
+			border: 1px solid var(--panel-border);
+			border-radius: 4px;
+			padding: 2px;
+			background: var(--vscode-input-background);
+			cursor: pointer;
+		}
+
 		.new-dialog h3 {
 			margin: 0 0 8px;
 			font-size: 13px;
@@ -1477,6 +1692,19 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			color: var(--vscode-input-foreground);
 			background: var(--vscode-input-background);
 			font: inherit;
+		}
+
+		.new-dialog .color-control {
+			display: grid;
+			margin: 0;
+		}
+
+		.new-dialog .color-control input[type="color"] {
+			display: block;
+			width: 32px;
+			height: 28px;
+			margin: 0;
+			padding: 2px;
 		}
 
 		.dialog-actions {
@@ -1809,13 +2037,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		.edge {
-			stroke: var(--vscode-descriptionForeground);
+			stroke: var(--edge);
 			stroke-width: 1.4;
 			stroke-opacity: 0.65;
 		}
 
 		.edge-arrow {
-			fill: var(--vscode-descriptionForeground);
+			fill: var(--edge);
 			opacity: 0.72;
 		}
 
@@ -1839,7 +2067,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.node:hover .node-shape,
 		.node.selected .node-shape {
-			stroke: var(--vscode-focusBorder);
+			stroke: var(--selection);
 			stroke-width: 3;
 		}
 
@@ -1894,14 +2122,14 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		.agent-marker .marker-fill {
-			fill: var(--vscode-sideBar-background);
-			stroke: var(--vscode-sideBar-foreground);
+			fill: var(--marker-background);
+			stroke: var(--marker);
 			stroke-width: 1.2;
 		}
 
 		.agent-marker .marker-line {
 			fill: none;
-			stroke: var(--vscode-sideBar-foreground);
+			stroke: var(--marker);
 			stroke-width: 1.2;
 			stroke-linecap: round;
 			stroke-linejoin: round;
@@ -1909,27 +2137,27 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.agent-marker .marker-dot,
 		.agent-marker .marker-star {
-			fill: var(--vscode-sideBar-foreground);
+			fill: var(--marker);
 			stroke: none;
 		}
 
 		.agent-marker .marker-star {
-			fill: var(--vscode-charts-yellow, #f2c744);
-			stroke: var(--vscode-sideBar-background);
+			fill: var(--marker-accent);
+			stroke: var(--marker-background);
 			stroke-width: 0.6;
 		}
 
 		.cog-marker .marker-line {
-			stroke: #000000;
+			stroke: var(--marker);
 		}
 
 		.cog-marker .marker-fill {
 			fill: transparent;
-			stroke: #000000;
+			stroke: var(--marker);
 		}
 
 		.cog-marker .marker-dot {
-			fill: #000000;
+			fill: var(--marker);
 		}
 
 		.skill-marker {
@@ -1938,7 +2166,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.skill-marker .marker-line {
 			fill: none;
-			stroke: var(--vscode-sideBar-background);
+			stroke: var(--marker);
 			stroke-width: 1.8;
 			stroke-linecap: round;
 			stroke-linejoin: round;
@@ -1949,22 +2177,22 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		.skill-context-marker .marker-badge {
-			fill: var(--vscode-sideBar-background);
-			stroke: var(--vscode-sideBar-foreground);
+			fill: var(--marker-background);
+			stroke: var(--marker);
 			stroke-width: 0.9;
 		}
 
 		.skill-context-marker .marker-line {
 			fill: none;
-			stroke: var(--vscode-sideBar-foreground);
+			stroke: var(--marker);
 			stroke-width: 1.4;
 			stroke-linecap: round;
 			stroke-linejoin: round;
 		}
 
 		.skill-context-marker .marker-star {
-			fill: var(--vscode-charts-yellow, #f2c744);
-			stroke: var(--vscode-sideBar-background);
+			fill: var(--marker-accent);
+			stroke: var(--marker-background);
 			stroke-width: 0.7;
 		}
 
@@ -1974,15 +2202,15 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.mcp-marker .marker-line {
 			fill: none;
-			stroke: var(--vscode-sideBar-background);
+			stroke: var(--marker-background);
 			stroke-width: 1.5;
 			stroke-linecap: round;
 			stroke-linejoin: round;
 		}
 
 		.mcp-marker .marker-fill {
-			fill: var(--vscode-sideBar-background);
-			stroke: var(--vscode-sideBar-background);
+			fill: var(--marker-background);
+			stroke: var(--marker-background);
 			stroke-width: 1;
 		}
 
@@ -1992,14 +2220,14 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.hook-marker .marker-line {
 			fill: none;
-			stroke: var(--vscode-sideBar-background);
+			stroke: var(--marker);
 			stroke-width: 3.5;
 			stroke-linecap: round;
 			stroke-linejoin: round;
 		}
 
 		.hook-marker .marker-fill {
-			fill: var(--vscode-sideBar-background);
+			fill: var(--marker);
 			stroke: none;
 		}
 
@@ -2058,12 +2286,21 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		</form>
 	</div>
 	<div id="settings-dialog-backdrop" class="dialog-backdrop" hidden>
-		<form id="settings-dialog" class="new-dialog">
-			<h3>${isWindowModeView ? 'Window-mode settings' : 'Activity bar settings'}</h3>
-			<label class="settings-toggle"><input id="side-by-side-layout" type="checkbox"><span>Side-by-side layout</span></label>
-			<label class="settings-toggle"><input id="hide-documentation-links" type="checkbox"><span>Hide documentation links</span></label>
-			<label class="size-control" for="node-size"><span>Element size</span><input id="node-size" type="range" min="0.85" max="2" step="0.05" value="1.1"><span id="node-size-value" class="size-value">110%</span></label>
-			<label class="size-control" for="text-size"><span>Editor text</span><input id="text-size" type="range" min="0.75" max="1.6" step="0.05" value="1"><span id="text-size-value" class="size-value">100%</span></label>
+		<form id="settings-dialog" class="new-dialog settings-dialog">
+			<h3>${isWindowModeView ? 'Window-mode Extension Settings' : 'Extension Settings'}</h3>
+			<section class="settings-section" aria-label="Layout settings">
+				<h4>Layout</h4>
+				<div class="settings-grid">
+					<label class="settings-toggle"><input id="side-by-side-layout" type="checkbox"><span>Side-by-side layout</span></label>
+					<label class="settings-toggle"><input id="hide-documentation-links" type="checkbox"><span>Hide documentation links</span></label>
+					<label class="size-control" for="node-size"><span>Element size</span><input id="node-size" type="range" min="0.85" max="2" step="0.05" value="1.1"><span id="node-size-value" class="size-value">110%</span></label>
+					<label class="size-control" for="text-size"><span>Editor text</span><input id="text-size" type="range" min="0.75" max="1.6" step="0.05" value="1"><span id="text-size-value" class="size-value">100%</span></label>
+				</div>
+			</section>
+			<section class="settings-section" aria-label="Visualizer colors">
+				<h4>Colors</h4>
+				<div class="color-grid">${colorPickerControls}</div>
+			</section>
 			<div class="dialog-actions">
 				<button id="close-settings" type="button">Close</button>
 			</div>
@@ -2115,6 +2352,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const textSizeValue = document.getElementById('text-size-value');
 		const sideBySideInput = document.getElementById('side-by-side-layout');
 		const hideDocumentationLinksInput = document.getElementById('hide-documentation-links');
+		const colorInputs = [...document.querySelectorAll('.color-picker')];
 		const docsInfo = document.getElementById('docs-info');
 		const graphElement = document.getElementById('graph');
 		const editorElement = document.getElementById('editor');
@@ -2138,6 +2376,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let textScale = Number(initialViewSettings.textScale) || 1;
 		let sideBySideLayout = Boolean(initialViewSettings.sideBySideLayout);
 		let documentationLinksHidden = Boolean(initialViewSettings.documentationLinksHidden);
+		let visualizerColors = { ...(initialViewSettings.colors || {}) };
+		const colorPickerFallbackColors = ${JSON.stringify(colorPickerFallbackColors)};
 		let graphZoom = 1;
 		let graphPanX = 0;
 		let graphPanY = 0;
@@ -2150,7 +2390,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			skill: 'var(--skill)',
 			mcp: 'var(--mcp)',
 			hook: 'var(--hook)',
-			'hook-event': 'var(--hook)',
+			'hook-event': 'var(--hook-event)',
 			handoff: 'var(--handoff)',
 			instruction: 'var(--instruction)',
 			tool: 'var(--tool)',
@@ -2213,6 +2453,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		];
 
 		applySettingsToInputs();
+		applyVisualizerColors();
 		setGraphLoading(true, 'Growing visualization...');
 		setSideBySideLayout(sideBySideLayout, false, false);
 		setDocumentationLinksHidden(documentationLinksHidden, false);
@@ -2285,6 +2526,14 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		hideDocumentationLinksInput.addEventListener('change', () => {
 			setDocumentationLinksHidden(hideDocumentationLinksInput.checked);
 		});
+
+		for (const colorInput of colorInputs) {
+			colorInput.addEventListener('input', () => {
+				visualizerColors = { ...visualizerColors, [colorInput.dataset.colorKey]: colorInput.value };
+				applyVisualizerColors();
+				persistCurrentSettings();
+			});
+		}
 
 		document.getElementById('new-file').addEventListener('click', () => {
 			newDialogBackdrop.hidden = false;
@@ -2395,7 +2644,25 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			nodeSizeValue.textContent = Math.round(nodeScale * 100) + '%';
 			textSizeInput.value = String(textScale);
 			textSizeValue.textContent = Math.round(textScale * 100) + '%';
+
+			for (const colorInput of colorInputs) {
+				colorInput.value = visualizerColors[colorInput.dataset.colorKey] || colorPickerFallbackColors[colorInput.dataset.colorKey] || colorInput.value;
+			}
+
 			applyEditorTextScale();
+		}
+
+		function applyVisualizerColors() {
+			for (const colorInput of colorInputs) {
+				const key = colorInput.dataset.colorKey;
+				const value = visualizerColors[key];
+
+				if (value) {
+					document.documentElement.style.setProperty('--' + key, value);
+				} else {
+					document.documentElement.style.removeProperty('--' + key);
+				}
+			}
 		}
 
 		function persistCurrentSettings() {
@@ -2407,6 +2674,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					documentationLinksHidden,
 					nodeScale,
 					textScale,
+					colors: visualizerColors,
 				},
 			});
 		}
@@ -2890,10 +3158,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderCogMarker() {
-			return '<g class="agent-marker cog-marker" aria-hidden="true">' +
-				'<path class="marker-fill" d="M-1.1 -5.8h2.2l.3 1.4 1 .4 1.3-.8 1.5 1.5-.8 1.3.4 1 1.4.3v2.2l-1.4.3-.4 1 .8 1.3-1.5 1.5-1.3-.8-1 .4-.3 1.4h-2.2l-.3-1.4-1-.4-1.3.8-1.5-1.5.8-1.3-.4-1-1.4-.3v-2.2l1.4-.3.4-1-.8-1.3 1.5-1.5 1.3.8 1-.4z"></path>' +
-				'<circle class="marker-line" cx="0" cy="0" r="2.2"></circle>' +
-				'<circle class="marker-dot" cx="0" cy="0" r="0.8"></circle>' +
+			return '<g class="agent-marker cog-marker" aria-hidden="true" transform="scale(0.62) translate(-12 -12)">' +
+				'<path class="marker-line" d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path>' +
+				'<path class="marker-line" d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.08A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15z"></path>' +
 			'</g>';
 		}
 
@@ -3871,7 +4138,7 @@ function readArray(value: unknown): unknown[] {
 	return Array.isArray(value) ? value : [];
 }
 
-function parseHandoffsInput(value: unknown): { ok: true; value: unknown[] } | { ok: false } {
+export function parseHandoffsInput(value: unknown): { ok: true; value: unknown[] } | { ok: false } {
 	if (typeof value !== 'string' || !value.trim()) {
 		return { ok: true, value: [] };
 	}
@@ -3917,7 +4184,7 @@ export function validateRequiredHandoffFields(handoffs: unknown[]): { ok: true }
 	return { ok: true };
 }
 
-function normalizePostedHandoffs(handoffs: unknown[]): unknown[] {
+export function normalizePostedHandoffs(handoffs: unknown[]): unknown[] {
 	return handoffs.map(handoff => {
 		const record = normalizeObject(handoff);
 		const label = readString(record.label) || readString(record.name);
@@ -3996,7 +4263,7 @@ function readHookEventName(value: unknown): HookEventName | undefined {
 	return typeof value === 'string' && isHookEventName(value) ? value : undefined;
 }
 
-function parseLines(value: unknown): string[] {
+export function parseLines(value: unknown): string[] {
 	if (Array.isArray(value)) {
 		return readStringArray(value);
 	}

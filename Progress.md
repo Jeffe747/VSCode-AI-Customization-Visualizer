@@ -1,9 +1,15 @@
 
 # Tasks
-- In the settings popup. Add a color picker section. Make handles for picking the colors of all the different visualizations/nodes/marks/icons and so on. Rename it from "Activity bar settings" to 'Extenstion Settings'. Also make the dialog larger to accomdate the new fields.
-- Act as a UI expert and give the settings dialog a pass. 
 
 # Done
+- The cogwheel icon for the 'settings-menu' is much more clean. Reuse the icon for the sub-agent nodes.
+- Gemini has done some code review. Address the two points outlined:
+1. Testing coverage: The parsing logic inside mapper.ts and extension.ts involves heavy object manipulation (e.g., normalizeObject, parsing handoffs). Ensuring comprehensive unit tests exist in the test directory for these utilities is critical.
+2. Error Handling: catch { return undefined } blocks exist in file readers. Consider logging errors to a dedicated VS Code Output Channel to assist with debugging malformed frontmatter.
+- In your implementation of the last step, you change some default colors. Please return them to their original colors.
+- Reviewed the project folder as a VSCode Extension Expert.
+- In the settings popup. Add a color picker section. Make handles for picking the colors of all the different visualizations/nodes/marks/icons and so on. Rename it from "Activity bar settings" to 'Extenstion Settings'. Also make the dialog larger to accomdate the new fields.
+- Act as a UI expert and give the settings dialog a pass. 
 - If i press 'open file' the file opens. That is good. If i try to reopen a already open file, it needs to move focus to that file.
 - Make the settings auto-save, so they persist.
 - Cut the settings in two. One for the view in the activity bar, and one for the window mode.
