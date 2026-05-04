@@ -8,7 +8,7 @@ Repository: [Jeffe747/AI_Customization_Visualizer](https://github.com/Jeffe747/A
 
 Releases: [Releases](https://github.com/Jeffe747/AI_Customization_Visualizer/releases)
 
-Copilot AI Customization Visualizer has been AI-engineered with ChatGpt5.5.
+Copilot AI Customization Visualizer has been AI-engineered with GPT-5.5
 
 ## Usage
 

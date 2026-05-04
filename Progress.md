@@ -1,7 +1,17 @@
 
 # Tasks
+- In the settings popup. Add a color picker section. Make handles for picking the colors of all the different visualizations/nodes/marks/icons and so on. Rename it from "Activity bar settings" to 'Extenstion Settings'. Also make the dialog larger to accomdate the new fields.
+- Act as a UI expert and give the settings dialog a pass. 
 
 # Done
+- If i press 'open file' the file opens. That is good. If i try to reopen a already open file, it needs to move focus to that file.
+- Make the settings auto-save, so they persist.
+- Cut the settings in two. One for the view in the activity bar, and one for the window mode.
+- The new section overshadows instruction file nodes. Move the colors to the same line as the node and edge counter, to reduce the height. Then make some padding that moves the instruction nodes down abit.
+- Move the color information inside the visualizer, but make them stick to the top. Remove the button for collapsing it. Remove the lefterover space.
+- The visializer does not fill-content. 
+- The drag around in the visualizer broke during implementation of the last task.
+- Make the visualizer zoomable. Zoom when the user holds ctrl+<scrollup/scrolldown>
 - Create a test that validates that filters is working.
 - The 'tools' filter is still broken
 - Add small buttons for prebuilt tools selection. Should be added above the filter. Create a small list of clickable prebuilt selections. 1. "Default Agent" with execute, read, edit, search, agent, web, todo.  2. Planning Agent with read, search, web, todo
@@ -181,7 +191,7 @@
 
 # Start prompt
 --
-Scaffold vscode extension
+> Scaffold vscode extension
 --
 I want to visualize Skills in this extenstion.
 

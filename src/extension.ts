@@ -12,6 +12,27 @@ const mcpGlob = '**/.vscode/mcp.json';
 const excludeGlob = '**/{node_modules,out,dist,.git}/**';
 const agentDescriptionPlaceholder = 'Use when: describe when this agent should be selected.';
 const agentBodyPlaceholder = "Describe this agent's role, workflow, constraints, and output style.";
+type VisualizerSettingsMode = 'activity' | 'window';
+
+interface VisualizerSettings {
+	sideBySideLayout: boolean;
+	documentationLinksHidden: boolean;
+	nodeScale: number;
+	textScale: number;
+}
+
+const defaultVisualizerSettings: VisualizerSettings = {
+	sideBySideLayout: false,
+	documentationLinksHidden: false,
+	nodeScale: 1.1,
+	textScale: 1,
+};
+
+const visualizerSettingsStorageKeys: Record<VisualizerSettingsMode, string> = {
+	activity: 'aivisualizer.settings.activityBar',
+	window: 'aivisualizer.settings.windowMode',
+};
+
 export const toolChoiceHiddenCssRule = `.tool-choice-list .choice-check[hidden] {
 			display: none;
 		}`;
@@ -22,9 +43,30 @@ export function isToolChoiceVisibleForFilter(toolName: string, filterValue: stri
 	return !normalizedFilter || toolName.toLowerCase().includes(normalizedFilter);
 }
 
+function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
+	const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+
+	return {
+		sideBySideLayout: typeof record.sideBySideLayout === 'boolean' ? record.sideBySideLayout : defaultVisualizerSettings.sideBySideLayout,
+		documentationLinksHidden: typeof record.documentationLinksHidden === 'boolean' ? record.documentationLinksHidden : defaultVisualizerSettings.documentationLinksHidden,
+		nodeScale: readNumberInRange(record.nodeScale, 0.85, 2, defaultVisualizerSettings.nodeScale),
+		textScale: readNumberInRange(record.textScale, 0.75, 1.6, defaultVisualizerSettings.textScale),
+	};
+}
+
+function readNumberInRange(value: unknown, min: number, max: number, fallback: number): number {
+	const numberValue = typeof value === 'number' ? value : Number(value);
+
+	if (!Number.isFinite(numberValue)) {
+		return fallback;
+	}
+
+	return Math.min(max, Math.max(min, numberValue));
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const scanner = new WorkspaceScanner();
-	const provider = new AgentVisualizerViewProvider(context.extensionUri, scanner);
+	const provider = new AgentVisualizerViewProvider(context, scanner);
 	const fileWatchers = createGraphFileWatchers(provider);
 
 	context.subscriptions.push(
@@ -97,7 +139,6 @@ class WorkspaceScanner {
 				const server = normalizeObject(value);
 				const serverType = readString(server.type) || (server.url ? 'http' : server.command ? 'stdio' : undefined);
 				const command = readString(server.url) || readString(server.command);
-
 				return { name, source, serverType, command };
 			});
 		} catch {
@@ -180,9 +221,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	private refreshTimer?: NodeJS.Timeout;
 
 	constructor(
-		private readonly extensionUri: vscode.Uri,
+		private readonly context: vscode.ExtensionContext,
 		private readonly scanner: WorkspaceScanner,
 	) {}
+
+	private get extensionUri(): vscode.Uri {
+		return this.context.extensionUri;
+	}
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this.webviewView = webviewView;
@@ -272,7 +317,22 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (message?.type === 'customization:create') {
 				void this.createCustomization(message);
 			}
+
+			if (message?.type === 'settings:update') {
+				void this.saveVisualizerSettings(message);
+			}
 		});
+	}
+
+	private getVisualizerSettings(mode: VisualizerSettingsMode): VisualizerSettings {
+		return normalizeVisualizerSettings(this.context.workspaceState.get(visualizerSettingsStorageKeys[mode]));
+	}
+
+	private async saveVisualizerSettings(message: Record<string, unknown>): Promise<void> {
+		const mode = message.mode === 'window' ? 'window' : 'activity';
+		const settings = normalizeVisualizerSettings(message.settings);
+
+		await this.context.workspaceState.update(visualizerSettingsStorageKeys[mode], settings);
 	}
 
 	refresh(): void {
@@ -420,8 +480,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
+		const existingViewColumn = findOpenTextTabViewColumn(uri);
 		const document = await vscode.workspace.openTextDocument(uri);
-		await vscode.window.showTextDocument(document, { preview: false });
+		await vscode.window.showTextDocument(document, { preview: false, viewColumn: existingViewColumn });
 	}
 
 	private async openDocs(urlValue: unknown): Promise<void> {
@@ -698,6 +759,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 	private getHtml(webview: vscode.Webview, isWindowModeView: boolean): string {
 		const nonce = getNonce();
+		const settings = this.getVisualizerSettings(isWindowModeView ? 'window' : 'activity');
 
 		return /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -893,22 +955,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		.status {
 			margin: 0;
 			color: var(--vscode-descriptionForeground);
+			white-space: nowrap;
 		}
 
 		.visualizer {
 			margin-bottom: 12px;
-		}
-
-		.visualizer-header {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 8px;
-			margin-bottom: 10px;
-		}
-
-		.visualizer-body[hidden] {
-			display: none;
 		}
 
 		.size-control {
@@ -955,8 +1006,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		.legend {
 			display: flex;
 			flex-wrap: wrap;
-			gap: 8px;
-			margin-bottom: 12px;
+			gap: 5px 8px;
+			margin: 0;
 			color: var(--vscode-descriptionForeground);
 			font-size: 11px;
 		}
@@ -981,6 +1032,20 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			border-radius: 6px;
 			background: color-mix(in srgb, var(--vscode-sideBar-background) 92%, var(--vscode-sideBar-foreground));
 			overflow: hidden;
+		}
+
+		.graph-overlay {
+			position: absolute;
+			top: 0;
+			left: 0;
+			right: 0;
+			z-index: 1;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 5px 10px;
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 80%, transparent);
+			pointer-events: none;
 		}
 
 		.graph svg {
@@ -1110,10 +1175,6 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.workspace-panels.side-by-side.has-editor .visualizer {
 			margin-bottom: 0;
-		}
-
-		.workspace-panels.side-by-side.has-editor .visualizer-header {
-			margin-top: 12px;
 		}
 
 		.workspace-panels.side-by-side.has-editor .editor {
@@ -1967,10 +2028,6 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				margin-bottom: 12px;
 			}
 
-			.workspace-panels.side-by-side.has-editor .visualizer-header {
-				margin-top: 0;
-			}
-
 			.workspace-panels.side-by-side.has-editor .editor {
 				margin-top: 12px;
 			}
@@ -2002,7 +2059,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	</div>
 	<div id="settings-dialog-backdrop" class="dialog-backdrop" hidden>
 		<form id="settings-dialog" class="new-dialog">
-			<h3>Settings</h3>
+			<h3>${isWindowModeView ? 'Window-mode settings' : 'Activity bar settings'}</h3>
 			<label class="settings-toggle"><input id="side-by-side-layout" type="checkbox"><span>Side-by-side layout</span></label>
 			<label class="settings-toggle"><input id="hide-documentation-links" type="checkbox"><span>Hide documentation links</span></label>
 			<label class="size-control" for="node-size"><span>Element size</span><input id="node-size" type="range" min="0.85" max="2" step="0.05" value="1.1"><span id="node-size-value" class="size-value">110%</span></label>
@@ -2036,21 +2093,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		</div>
 		<div id="workspace-panels" class="workspace-panels">
 			<section class="visualizer" aria-label="Graph visualizer">
-				<div class="visualizer-header">
-					<div id="status" class="status">Scanning workspace...</div>
-					<button id="toggle-visualizer" class="collapse-button" type="button" title="Collapse visualizer" aria-expanded="true"><svg class="collapse-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M7 10l5 5 5-5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M5 5h14" stroke-width="2" stroke-linecap="round"></path></svg></button>
-				</div>
 				<div id="visualizer-body" class="visualizer-body">
-					<div class="legend">
-						<span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span>
-						<span><i class="swatch" style="background: var(--skill)"></i>Skill</span>
-						<span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span>
-						<span><i class="swatch" style="background: var(--agent)"></i>Agent</span>
-						<span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span>
-						<span><i class="swatch" style="background: var(--mcp)"></i>MCP</span>
-						<span><i class="swatch" style="background: var(--hook)"></i>Hook</span>
-					</div>
-					<div id="graph" class="graph"></div>
+					<div id="graph" class="graph"><div class="graph-overlay"><div id="status" class="status">Scanning workspace...</div><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div></div></div>
 				</div>
 			</section>
 			<section id="editor" class="editor" hidden aria-live="polite"></section>
@@ -2058,12 +2102,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	</div>
 	<script nonce="${nonce}">
 		const isWindowModeView = ${isWindowModeView ? 'true' : 'false'};
+		const settingsMode = isWindowModeView ? 'window' : 'activity';
+		const initialViewSettings = ${JSON.stringify(settings)};
 		const agentDescriptionPlaceholder = ${JSON.stringify(agentDescriptionPlaceholder)};
 		const agentBodyPlaceholder = ${JSON.stringify(agentBodyPlaceholder)};
 		const vscode = acquireVsCodeApi();
 		const contentShell = document.getElementById('content-shell');
 		const workspacePanels = document.getElementById('workspace-panels');
-		const visualizerBody = document.getElementById('visualizer-body');
 		const nodeSizeInput = document.getElementById('node-size');
 		const nodeSizeValue = document.getElementById('node-size-value');
 		const textSizeInput = document.getElementById('text-size');
@@ -2073,9 +2118,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const docsInfo = document.getElementById('docs-info');
 		const graphElement = document.getElementById('graph');
 		const editorElement = document.getElementById('editor');
-		const statusElement = document.getElementById('status');
 		const inactiveOverlay = document.getElementById('inactive-overlay');
-		const toggleVisualizerButton = document.getElementById('toggle-visualizer');
 		const windowModeButton = document.getElementById('popout');
 		const aboutDialogBackdrop = document.getElementById('about-dialog-backdrop');
 		const settingsDialogBackdrop = document.getElementById('settings-dialog-backdrop');
@@ -2090,11 +2133,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const newName = document.getElementById('new-name');
 		let activeGraph;
 		let selectedNodeId;
-		let visualizerCollapsed = false;
-		let nodeScale = Number(nodeSizeInput.value) || 1.1;
-		let textScale = Number(textSizeInput.value) || 1;
-		let sideBySideLayout = Boolean(vscode.getState()?.sideBySideLayout);
-		let documentationLinksHidden = Boolean(vscode.getState()?.documentationLinksHidden);
+		let currentGraphStatus = 'Scanning workspace...';
+		let nodeScale = Number(initialViewSettings.nodeScale) || 1.1;
+		let textScale = Number(initialViewSettings.textScale) || 1;
+		let sideBySideLayout = Boolean(initialViewSettings.sideBySideLayout);
+		let documentationLinksHidden = Boolean(initialViewSettings.documentationLinksHidden);
+		let graphZoom = 1;
 		let graphPanX = 0;
 		let graphPanY = 0;
 		let toolFilterValue = '';
@@ -2168,12 +2212,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			{ label: 'Planning Agent', tools: ['read', 'search', 'web', 'todo'] },
 		];
 
+		applySettingsToInputs();
 		setGraphLoading(true, 'Growing visualization...');
-		setSideBySideLayout(sideBySideLayout, false);
-		setDocumentationLinksHidden(documentationLinksHidden);
+		setSideBySideLayout(sideBySideLayout, false, false);
+		setDocumentationLinksHidden(documentationLinksHidden, false);
 
 		document.getElementById('refresh').addEventListener('click', () => {
-			statusElement.textContent = 'Refreshing...';
+			setStatus('Refreshing...');
 			setGraphLoading(true, 'Refreshing visualization...');
 			vscode.postMessage({ type: 'refresh' });
 		});
@@ -2216,15 +2261,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 		});
 
-		toggleVisualizerButton.addEventListener('click', () => {
-			setVisualizerCollapsed(!visualizerCollapsed);
-		});
-
 		nodeSizeInput.addEventListener('input', () => {
 			nodeScale = Number(nodeSizeInput.value) || 1;
 			nodeSizeValue.textContent = Math.round(nodeScale * 100) + '%';
+			persistCurrentSettings();
 
-			if (activeGraph && !visualizerCollapsed) {
+			if (activeGraph) {
 				renderGraph(activeGraph, true);
 			}
 		});
@@ -2232,6 +2274,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		textSizeInput.addEventListener('input', () => {
 			textScale = Number(textSizeInput.value) || 1;
 			textSizeValue.textContent = Math.round(textScale * 100) + '%';
+			persistCurrentSettings();
 			applyEditorTextScale();
 		});
 
@@ -2266,13 +2309,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			event.preventDefault();
 
 			if (newKind.value === 'mcp') {
-				statusElement.textContent = 'Opening MCP servers...';
+				setStatus('Opening MCP servers...');
 				vscode.postMessage({ type: 'mcp:open' });
 				closeNewDialog();
 				return;
 			}
 
-			statusElement.textContent = 'Creating ' + newKind.value + '...';
+			setStatus('Creating ' + newKind.value + '...');
 			vscode.postMessage({ type: 'customization:create', kind: newKind.value, instructionType: newInstructionType.value, name: newName.value });
 			closeNewDialog();
 		});
@@ -2300,7 +2343,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		window.addEventListener('resize', () => {
 			clearTimeout(resizeTimeout);
 			resizeTimeout = setTimeout(() => {
-				if (activeGraph && !visualizerCollapsed) {
+				if (activeGraph) {
 					renderGraph(activeGraph, true);
 				}
 			}, 120);
@@ -2320,14 +2363,14 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			if (message.type === 'graph:error') {
 				setGraphLoading(false);
-				statusElement.textContent = message.message;
-				graphElement.innerHTML = '';
+				setStatus(message.message);
+				graphElement.innerHTML = renderGraphOverlay();
 				renderEditor(undefined);
 			}
 
 			if (message.type === 'save:error') {
 				setGraphLoading(false);
-				statusElement.textContent = message.message;
+				setStatus(message.message);
 			}
 
 			if (message.type === 'graph:loading') {
@@ -2347,48 +2390,69 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			inactiveOverlay.hidden = !originalInactive;
 		}
 
-		function setVisualizerCollapsed(collapsed) {
-			visualizerCollapsed = collapsed;
-			visualizerBody.hidden = collapsed;
-			toggleVisualizerButton.innerHTML = renderCollapseIcon(collapsed);
-			toggleVisualizerButton.title = collapsed ? 'Expand visualizer' : 'Collapse visualizer';
-			toggleVisualizerButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-
-			if (!collapsed && activeGraph) {
-				renderGraph(activeGraph, true);
-			}
+		function applySettingsToInputs() {
+			nodeSizeInput.value = String(nodeScale);
+			nodeSizeValue.textContent = Math.round(nodeScale * 100) + '%';
+			textSizeInput.value = String(textScale);
+			textSizeValue.textContent = Math.round(textScale * 100) + '%';
+			applyEditorTextScale();
 		}
 
-		function setSideBySideLayout(enabled, shouldRender = true) {
+		function persistCurrentSettings() {
+			vscode.postMessage({
+				type: 'settings:update',
+				mode: settingsMode,
+				settings: {
+					sideBySideLayout,
+					documentationLinksHidden,
+					nodeScale,
+					textScale,
+				},
+			});
+		}
+
+		function setSideBySideLayout(enabled, shouldRender = true, shouldPersist = true) {
 			sideBySideLayout = Boolean(enabled);
 			sideBySideInput.checked = sideBySideLayout;
 			workspacePanels.classList.toggle('side-by-side', sideBySideLayout);
-			vscode.setState({ ...(vscode.getState() || {}), sideBySideLayout });
 
-			if (shouldRender && activeGraph && !visualizerCollapsed) {
+			if (shouldPersist) {
+				persistCurrentSettings();
+			}
+
+			if (shouldRender && activeGraph) {
 				renderGraph(activeGraph, true);
 			}
 		}
 
-		function setDocumentationLinksHidden(hidden) {
+		function setDocumentationLinksHidden(hidden, shouldPersist = true) {
 			documentationLinksHidden = Boolean(hidden);
 			hideDocumentationLinksInput.checked = documentationLinksHidden;
 			docsInfo.hidden = documentationLinksHidden;
 			docsInfo.classList.toggle('documentation-links-hidden', documentationLinksHidden);
-			vscode.setState({ ...(vscode.getState() || {}), documentationLinksHidden });
+
+			if (shouldPersist) {
+				persistCurrentSettings();
+			}
 		}
 
 		function scheduleSideBySideGraphRender() {
-			if (sideBySideLayout && activeGraph && !visualizerCollapsed) {
+			if (sideBySideLayout && activeGraph) {
 				requestAnimationFrame(() => renderGraph(activeGraph, true));
 			}
 		}
 
-		function renderCollapseIcon(collapsed) {
-			const chevron = collapsed ? 'M10 7l5 5-5 5' : 'M7 10l5 5 5-5';
-			const rail = collapsed ? 'M5 5v14' : 'M5 5h14';
+		function setStatus(message) {
+			currentGraphStatus = message;
+			const statusElement = document.getElementById('status');
 
-			return '<svg class="collapse-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="' + chevron + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="' + rail + '" stroke-width="2" stroke-linecap="round"></path></svg>';
+			if (statusElement) {
+				statusElement.textContent = message;
+			}
+		}
+
+		function renderGraphOverlay() {
+			return '<div class="graph-overlay"><div id="status" class="status">' + escapeHtml(currentGraphStatus) + '</div><div class="legend"><span><i class="swatch" style="background: var(--instruction)"></i>Instructions</span><span><i class="swatch" style="background: var(--skill)"></i>Skill</span><span><i class="swatch" style="background: var(--prompt)"></i>Prompt</span><span><i class="swatch" style="background: var(--agent)"></i>Agent</span><span><i class="swatch" style="background: var(--handoff)"></i>Handoff</span><span><i class="swatch" style="background: var(--mcp)"></i>MCP</span><span><i class="swatch" style="background: var(--hook)"></i>Hook</span></div></div>';
 		}
 
 		function setGraphLoading(loading, label = 'Growing visualization...') {
@@ -2409,10 +2473,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		function renderGraph(graph, preserveEditor = false) {
 			activeGraph = graph;
-			statusElement.textContent = graph.nodes.length + ' nodes, ' + graph.links.length + ' edges';
+			setStatus(graph.nodes.length + ' nodes, ' + graph.links.length + ' edges');
 
 			if (graph.nodes.length === 0) {
-				graphElement.innerHTML = '<div class="empty">No .agent.md or .prompt.md files found.</div>';
+				graphElement.innerHTML = renderGraphOverlay() + '<div class="empty">No .agent.md or .prompt.md files found.</div>';
 				renderEditor(undefined);
 				return;
 			}
@@ -2421,8 +2485,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const layoutWidth = getGraphLayoutWidth(graph, viewportWidth);
 			const positions = layoutGraph(graph, layoutWidth);
 			const maxY = Math.max(...[...positions.values()].map(position => position.y));
-			const height = Math.max(320, maxY + 92 * nodeScale);
-			graphPanX = Math.min(graphPanX, Math.max(0, layoutWidth - viewportWidth));
+			const viewportHeight = getGraphViewportHeight();
+			const contentHeight = Math.max(viewportHeight, maxY + 92 * nodeScale);
+			graphElement.style.height = viewportHeight + 'px';
+			clampGraphPan(viewportWidth, viewportHeight, layoutWidth, contentHeight);
 			const currentSelectionExists = graph.nodes.some(node => node.id === selectedNodeId);
 
 			if (!currentSelectionExists) {
@@ -2519,8 +2585,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				'</g>';
 			}).join('');
 
-			graphElement.innerHTML = '<svg width="100%" height="' + height + '" viewBox="' + graphPanX + ' ' + graphPanY + ' ' + viewportWidth + ' ' + height + '" role="img" aria-label="Copilot AI customization graph">' + edges + nodes + '</svg>';
-			installGraphPan(graphElement.querySelector('svg'), viewportWidth, height);
+			graphElement.innerHTML = renderGraphOverlay() + '<svg width="100%" height="' + viewportHeight + '" viewBox="' + getGraphViewBox(viewportWidth, viewportHeight) + '" role="img" aria-label="Copilot AI customization graph">' + edges + nodes + '</svg>';
+			installGraphNavigation(graphElement.querySelector('svg'), viewportWidth, viewportHeight, layoutWidth, contentHeight);
 
 			for (const nodeElement of graphElement.querySelectorAll('.node')) {
 				nodeElement.addEventListener('click', () => selectNode(nodeElement.dataset.nodeId));
@@ -2608,7 +2674,26 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			return Math.max(viewportWidth, maxNodesOnLevel * minimumNodeGap + sidePadding * 2);
 		}
 
-		function installGraphPan(svg, width, height) {
+		function getGraphViewportHeight() {
+			const bounds = graphElement.getBoundingClientRect();
+			const bottomPadding = 12;
+
+			return Math.max(320, Math.floor(window.innerHeight - bounds.top - bottomPadding));
+		}
+
+		function getGraphViewBox(width, height) {
+			return graphPanX + ' ' + graphPanY + ' ' + (width / graphZoom) + ' ' + (height / graphZoom);
+		}
+
+		function clampGraphPan(width, height, layoutWidth, contentHeight) {
+			const viewWidth = width / graphZoom;
+			const viewHeight = height / graphZoom;
+
+			graphPanX = Math.min(Math.max(0, graphPanX), Math.max(0, layoutWidth - viewWidth));
+			graphPanY = Math.min(Math.max(0, graphPanY), Math.max(0, contentHeight - viewHeight));
+		}
+
+		function installGraphNavigation(svg, width, height, layoutWidth, contentHeight) {
 			if (!svg) {
 				return;
 			}
@@ -2640,14 +2725,37 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				}
 
 				const bounds = svg.getBoundingClientRect();
-				const unitX = width / Math.max(1, bounds.width);
-				const unitY = height / Math.max(1, bounds.height);
+				const unitX = (width / graphZoom) / Math.max(1, bounds.width);
+				const unitY = (height / graphZoom) / Math.max(1, bounds.height);
 
 				graphPanX = startPanX - (event.clientX - startClientX) * unitX;
 				graphPanY = startPanY - (event.clientY - startClientY) * unitY;
-				svg.setAttribute('viewBox', graphPanX + ' ' + graphPanY + ' ' + width + ' ' + height);
+				clampGraphPan(width, height, layoutWidth, contentHeight);
+				svg.setAttribute('viewBox', getGraphViewBox(width, height));
 				event.preventDefault();
 			});
+
+			svg.addEventListener('wheel', event => {
+				if (!event.ctrlKey) {
+					return;
+				}
+
+				const bounds = svg.getBoundingClientRect();
+				const viewWidth = width / graphZoom;
+				const viewHeight = height / graphZoom;
+				const pointerRatioX = (event.clientX - bounds.left) / Math.max(1, bounds.width);
+				const pointerRatioY = (event.clientY - bounds.top) / Math.max(1, bounds.height);
+				const pointerGraphX = graphPanX + pointerRatioX * viewWidth;
+				const pointerGraphY = graphPanY + pointerRatioY * viewHeight;
+				const zoomFactor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+
+				graphZoom = Math.min(4, Math.max(0.5, graphZoom * zoomFactor));
+				graphPanX = pointerGraphX - pointerRatioX * (width / graphZoom);
+				graphPanY = pointerGraphY - pointerRatioY * (height / graphZoom);
+				clampGraphPan(width, height, layoutWidth, contentHeight);
+				svg.setAttribute('viewBox', getGraphViewBox(width, height));
+				event.preventDefault();
+			}, { passive: false });
 
 			const endPan = event => {
 				if (activePointerId !== event.pointerId) {
@@ -2729,6 +2837,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const minLevel = Math.min(...levels.values());
 			const normalizedLevels = new Map([...levels.entries()].map(([id, level]) => [id, level - minLevel]));
 			const verticalGap = 100 * nodeScale;
+			const topPadding = 66 * nodeScale;
 			const nodesByLevel = new Map();
 
 			for (const node of graph.nodes) {
@@ -2749,7 +2858,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 					positions.set(node.id, {
 						x: Math.min(width - sidePadding, Math.max(sidePadding, horizontalGap * (index + 1))),
-						y: 44 * nodeScale + level * verticalGap,
+						y: topPadding + level * verticalGap,
 					});
 				});
 			}
@@ -3188,12 +3297,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					: { ok: true };
 
 			if (!handoffValidation.ok) {
-				statusElement.textContent = 'Unable to save: handoff ' + (handoffValidation.index + 1) + ' is missing ' + handoffValidation.field + '.';
+				setStatus('Unable to save: handoff ' + (handoffValidation.index + 1) + ' is missing ' + handoffValidation.field + '.');
 				handoffValidation.element?.focus();
 				return;
 			}
 
-			statusElement.textContent = 'Saving ' + node.label + '...';
+			setStatus('Saving ' + node.label + '...');
 			vscode.postMessage({
 				type: 'node:save',
 				nodeType: node.type,
@@ -4299,6 +4408,27 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+function findOpenTextTabViewColumn(uri: vscode.Uri): vscode.ViewColumn | undefined {
+	for (const tabGroup of vscode.window.tabGroups.all) {
+		if (tabGroup.tabs.some(tab => tab.input instanceof vscode.TabInputText && areSameResourceUri(tab.input.uri, uri))) {
+			return tabGroup.viewColumn;
+		}
+	}
+
+	return undefined;
+}
+
+function areSameResourceUri(left: vscode.Uri, right: vscode.Uri): boolean {
+	if (left.scheme === 'file' && right.scheme === 'file') {
+		const leftPath = path.normalize(left.fsPath);
+		const rightPath = path.normalize(right.fsPath);
+
+		return process.platform === 'win32' ? leftPath.toLowerCase() === rightPath.toLowerCase() : leftPath === rightPath;
+	}
+
+	return left.toString() === right.toString();
 }
 
 function unique(values: string[]): string[] {
