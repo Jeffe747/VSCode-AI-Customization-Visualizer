@@ -8,8 +8,6 @@ Copilot AI Customization Visualizer is a VS Code extension for inspecting and ed
 
 Author: [Jeffe747@github](https://marketplace.visualstudio.com/search?term=publisher%3A%22Jeffe747%22&target=VSCode&category=All%20categories&sortBy=Relevance)
 
-Repository: [Jeffe747/AI_Customization_Visualizer](https://github.com/Jeffe747/AI_Customization_Visualizer)
-
 Releases: Get it [here](https://github.com/Jeffe747/AI_Customization_Visualizer/releases) or [build](https://github.com/Jeffe747/AI-Customization-Visualizer/blob/main/vsix.bat) it yourself.
 
 Copilot AI Customization Visualizer has been AI-engineered with GPT-5.5
@@ -18,7 +16,8 @@ Copilot AI Customization Visualizer has been AI-engineered with GPT-5.5
 
 Open the `Copilot AI Customization Visualizer` activity bar view to inspect the current workspace. Select a node to edit its metadata and system prompt, then use `Save` or `Ctrl+S` to write changes back to the source file.
 
-Zoom in the visuaizer with `Ctrl+Scrollwheel`. Drag around with the mouse.
+Zoom in the visuaizer with `Ctrl+Scrollwheel`. 
+Drag around with the mouse.
 
 Use the toolbar settings button to adjust graph element size and editor text size.
 

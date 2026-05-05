@@ -2,6 +2,9 @@
 # Tasks
 
 # Done
+- Changed the default handoff visualization color to RGB(182,135,99).
+- Changed the default instruction visualization color to RGB(3,159,170).
+- Restored graph node click highlighting by suppressing the native SVG focus rectangle that left a persistent white box.
 - Made bidirectional graph links clearer by separating reciprocal arrows onto curved opposing paths.
 - Made webview error messages appear as dismissable toast notifications.
 - Validated new customization file creation before writing so duplicate names and path conflicts show a non-destructive user error.

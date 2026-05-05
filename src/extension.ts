@@ -62,11 +62,11 @@ const visualizerDefaultCssValues: Record<VisualizerColorKey, string> = {
 	agent: 'var(--vscode-charts-red)',
 	prompt: 'var(--vscode-charts-green)',
 	skill: 'var(--vscode-charts-blue)',
-	instruction: 'var(--vscode-charts-purple)',
+	instruction: '#039faa',
 	mcp: 'var(--vscode-charts-yellow)',
 	hook: 'var(--vscode-charts-foreground, var(--vscode-charts-blue))',
 	'hook-event': 'var(--hook)',
-	handoff: 'var(--vscode-charts-orange)',
+	handoff: '#b68763',
 	tool: 'var(--vscode-charts-orange)',
 	edge: 'var(--vscode-descriptionForeground)',
 	marker: '#000000',
@@ -80,11 +80,11 @@ const colorPickerFallbackColors: Record<VisualizerColorKey, string> = {
 	agent: '#d84f4f',
 	prompt: '#4aa36b',
 	skill: '#4f8bd8',
-	instruction: '#8c6bd8',
+	instruction: '#039faa',
 	mcp: '#d8b84f',
 	hook: '#9aa0a6',
 	'hook-event': '#9aa0a6',
-	handoff: '#d88a4f',
+	handoff: '#b68763',
 	tool: '#d88a4f',
 	edge: '#8f96a3',
 	marker: '#000000',
@@ -2440,6 +2440,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.node {
 			cursor: pointer;
+		}
+
+		.node:focus,
+		.node:focus-visible {
+			outline: none;
 		}
 
 		.node:hover .node-shape,
