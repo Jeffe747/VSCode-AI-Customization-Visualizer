@@ -1,7 +1,16 @@
-
 # Tasks
 
 # Done
+- Fixed sub-agent edit view failures caused by bundled helper renaming by defining the tool-filter and MCP tool-reference helpers directly inside the webview script.
+- Fixed selected nodes not showing the edit view by rendering the graph without clearing editor state, explicitly revealing the editor, adding editor render diagnostics, and hardening agent edit sections against non-array data.
+- Added a Debug messages setting and dedicated debug toast that reports graph click details, selected node metadata, full file URI/path, editability, graph counts, and Open file requests.
+- Reworked graph node selection with coordinate-based SVG hit testing so agent and sub-agent clicks are detected even when SVG event targets are unreliable.
+- Fixed sub-agent node clicks to select through direct node handlers, and show a toast when a sub-agent is inferred/unresolved and has no editable file.
+- Hardened graph node selection so agent nodes open reliably even after pointer/pan interactions.
+- Made save failures report visible webview errors instead of failing silently.
+- Made Open file report invalid selections, normalize workspace URI matching more robustly, and explicitly focus opened editors.
+- Added toast error reporting for node open and save failures.
+- Fixed self-referential handoffs so a handoff targeting its owning agent no longer creates a layout cycle that makes the agent hard to open.
 - Fixed agent selection in the visualizer by adding reliable SVG node hit targets and delegated node clicks.
 - Added a test that verifies the Tools edit section saves selected tools.
 - Fixed the Tools edit section so selected tools are preserved and saved from edit state.

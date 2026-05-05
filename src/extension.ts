@@ -32,6 +32,7 @@ interface VisualizerSettings {
 	heatmapMediumThreshold: number;
 	heatmapHighThreshold: number;
 	heatmapBaselineModel?: string;
+	debugMessagesEnabled: boolean;
 }
 
 interface ReadProblem {
@@ -105,6 +106,7 @@ const defaultVisualizerSettings: VisualizerSettings = {
 	heatmapMediumThreshold: 0.38,
 	heatmapHighThreshold: 0.72,
 	heatmapBaselineModel: undefined,
+	debugMessagesEnabled: false,
 };
 
 const visualizerSettingsStorageKeys: Record<VisualizerSettingsMode, string> = {
@@ -153,6 +155,7 @@ function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
 		heatmapMediumThreshold,
 		heatmapHighThreshold,
 		heatmapBaselineModel: readString(record.heatmapBaselineModel),
+		debugMessagesEnabled: typeof record.debugMessagesEnabled === 'boolean' ? record.debugMessagesEnabled : defaultVisualizerSettings.debugMessagesEnabled,
 	};
 }
 
@@ -467,7 +470,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (message?.type === 'node:open') {
-				void this.openNode(message.uri);
+				void this.openNode(message.uri).catch(error => this.postError(formatOperationError('Unable to open file', error)));
 			}
 
 			if (message?.type === 'mcp:open') {
@@ -479,7 +482,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (message?.type === 'node:save') {
-				void this.saveNode(message);
+				void this.saveNode(message).catch(error => this.postSaveError(formatOperationError('Unable to save', error)));
 			}
 
 			if (message?.type === 'customization:create') {
@@ -519,6 +522,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			nodeScale: settings.nodeScale,
 			textScale: settings.textScale,
 			orphanToggleVisible: settings.orphanToggleVisible,
+			debugMessagesEnabled: settings.debugMessagesEnabled,
 		};
 		const sharedSettings: VisualizerSettings = {
 			...existingSharedSettings,
@@ -748,12 +752,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const uri = this.parseWorkspaceUri(uriValue);
 
 		if (!uri) {
+			await this.postError('Unable to open file: the selected node is not a workspace file.');
 			return;
 		}
 
 		const existingViewColumn = findOpenTextTabViewColumn(uri);
 		const document = await vscode.workspace.openTextDocument(uri);
-		await vscode.window.showTextDocument(document, { preview: false, viewColumn: existingViewColumn });
+		await vscode.window.showTextDocument(document, { preview: false, preserveFocus: false, viewColumn: existingViewColumn });
 	}
 
 	private async openDocs(urlValue: unknown): Promise<void> {
@@ -1020,10 +1025,15 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			return undefined;
 		}
 
-		const uri = vscode.Uri.parse(value);
-		const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+		let uri: vscode.Uri;
 
-		return workspaceFolder ? uri : undefined;
+		try {
+			uri = vscode.Uri.parse(value);
+		} catch {
+			return undefined;
+		}
+
+		return isWorkspaceResourceUri(uri) ? uri : undefined;
 	}
 
 	private async postError(message: string): Promise<void> {
@@ -1570,6 +1580,30 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		.error-toast-close:hover {
 			border-color: var(--vscode-errorForeground);
+		}
+
+		.debug-toast {
+			bottom: 82px;
+			border-color: color-mix(in srgb, var(--vscode-focusBorder) 58%, var(--panel-border));
+			background: color-mix(in srgb, var(--vscode-editorWidget-background) 94%, var(--vscode-focusBorder));
+		}
+
+		.debug-toast .error-toast-close {
+			background: color-mix(in srgb, var(--vscode-sideBar-background) 88%, var(--vscode-focusBorder));
+		}
+
+		.debug-toast .error-toast-close:hover {
+			border-color: var(--vscode-focusBorder);
+		}
+
+		.debug-toast-title {
+			display: block;
+			margin-bottom: 4px;
+			font-weight: 700;
+		}
+
+		.debug-toast-message {
+			white-space: pre-wrap;
 		}
 
 		.workspace-panels.side-by-side.has-editor {
@@ -2731,6 +2765,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 						<label class="settings-toggle"><input id="side-by-side-layout" type="checkbox"><span>Side-by-side layout</span></label>
 						<label class="settings-toggle"><input id="hide-documentation-links" type="checkbox"><span>Hide documentation links</span></label>
 						<label class="settings-toggle"><input id="show-orphan-toggle" type="checkbox"><span>Show orphan toggle</span></label>
+						<label class="settings-toggle"><input id="debug-messages-enabled" type="checkbox"><span>Debug messages</span></label>
 					</div>
 				</div>
 				<div class="settings-subsection" aria-label="Layout sizing">
@@ -2791,6 +2826,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		</div>
 	</div>
 	<div id="error-toast" class="error-toast" role="alert" aria-live="assertive" hidden><div id="error-toast-message" class="error-toast-message"></div><button id="error-toast-close" class="error-toast-close" type="button" title="Dismiss error" aria-label="Dismiss error">x</button></div>
+	<div id="debug-toast" class="error-toast debug-toast" role="status" aria-live="polite" hidden><div><span class="debug-toast-title">Debug</span><div id="debug-toast-message" class="error-toast-message debug-toast-message"></div></div><button id="debug-toast-close" class="error-toast-close" type="button" title="Dismiss debug message" aria-label="Dismiss debug message">x</button></div>
 	<script nonce="${nonce}">
 		const isWindowModeView = ${isWindowModeView ? 'true' : 'false'};
 		const settingsMode = isWindowModeView ? 'window' : 'activity';
@@ -2812,6 +2848,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const hideDocumentationLinksInput = document.getElementById('hide-documentation-links');
 		const showOrphanToggleInput = document.getElementById('show-orphan-toggle');
 		const showTokenHeatmapToggleInput = document.getElementById('show-token-heatmap-toggle');
+		const debugMessagesInput = document.getElementById('debug-messages-enabled');
 		const colorInputs = [...document.querySelectorAll('.color-picker')];
 		const docsInfo = document.getElementById('docs-info');
 		const graphElement = document.getElementById('graph');
@@ -2819,6 +2856,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const errorToast = document.getElementById('error-toast');
 		const errorToastMessage = document.getElementById('error-toast-message');
 		const errorToastClose = document.getElementById('error-toast-close');
+		const debugToast = document.getElementById('debug-toast');
+		const debugToastMessage = document.getElementById('debug-toast-message');
+		const debugToastClose = document.getElementById('debug-toast-close');
 		const inactiveOverlay = document.getElementById('inactive-overlay');
 		const windowModeButton = document.getElementById('popout');
 		const aboutDialogBackdrop = document.getElementById('about-dialog-backdrop');
@@ -2844,6 +2884,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let documentationLinksHidden = Boolean(initialViewSettings.documentationLinksHidden);
 		let heatmapToggleVisible = Boolean(initialViewSettings.heatmapToggleVisible);
 		let orphanToggleVisible = Boolean(initialViewSettings.orphanToggleVisible);
+		let debugMessagesEnabled = Boolean(initialViewSettings.debugMessagesEnabled);
 		let visualizerColors = { ...(initialViewSettings.colors || {}) };
 		let graphLayoutAlgorithm = isGraphLayoutAlgorithm(savedWebviewState.graphLayoutAlgorithm) ? savedWebviewState.graphLayoutAlgorithm : 'hierarchical';
 		let tokenHeatmapEnabled = Boolean(savedWebviewState.tokenHeatmapEnabled);
@@ -2852,10 +2893,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let graphZoom = 1;
 		let graphPanX = 0;
 		let graphPanY = 0;
+		let renderedNodeHitAreas = [];
 		let graphShouldCenterOnNextRender = true;
 		let pendingSaveScrollState;
 		let toolFilterValue = '';
 		let toolFilterTimeout;
+		let suppressedNodeClickId;
 		const editedToolsByNodeId = {};
 		let resizeTimeout;
 		const colors = {
@@ -2888,9 +2931,24 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			{ name: 'env', description: 'Additional environment variables as a JSON object.', placeholder: '{"NODE_ENV":"test"}' },
 			{ name: 'timeout', description: 'Timeout in seconds. Default is 30.', placeholder: '30' },
 		];
-		${isToolChoiceVisibleForFilter.toString()}
-		${isMcpServerToolReference.toString()}
-		${createSavedToolsList.toString()}
+		function isToolChoiceVisibleForFilter(toolName, filterValue) {
+			const normalizedFilter = filterValue.trim().toLowerCase();
+
+			return !normalizedFilter || toolName.toLowerCase().includes(normalizedFilter);
+		}
+
+		function isMcpServerToolReference(toolName) {
+			return typeof toolName === 'string' && toolName.endsWith('/*');
+		}
+
+		function createSavedToolsList(selectedTools, existingTools, preserveMcpServerReferences = false) {
+			const normalizeToolList = value => Array.isArray(value)
+				? unique(value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean))
+				: [];
+			const preservedTools = preserveMcpServerReferences ? normalizeToolList(existingTools).filter(isMcpServerToolReference) : [];
+
+			return unique([...normalizeToolList(selectedTools), ...preservedTools]);
+		}
 		const fieldHelp = {
 			agentName: 'Custom agent name. If not specified, VS Code uses the file name.',
 			promptName: 'Prompt name used after typing / in chat. If not specified, VS Code uses the file name.',
@@ -2957,6 +3015,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		document.getElementById('close-about').addEventListener('click', closeAboutDialog);
 		errorToastClose.addEventListener('click', hideErrorToast);
+		debugToastClose.addEventListener('click', hideDebugToast);
 
 		aboutDialogBackdrop.addEventListener('click', event => {
 			if (event.target === aboutDialogBackdrop) {
@@ -3052,6 +3111,16 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				renderGraph(activeGraph, true);
 			}
 		});
+		debugMessagesInput.addEventListener('change', () => {
+			debugMessagesEnabled = debugMessagesInput.checked;
+			persistCurrentSettings();
+
+			if (debugMessagesEnabled) {
+				showDebugToast('Debug messages enabled. Node clicks and Open file requests will appear here.');
+			} else {
+				hideDebugToast();
+			}
+		});
 
 		for (const colorInput of colorInputs) {
 			colorInput.addEventListener('input', () => {
@@ -3117,6 +3186,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (event.key === 'Escape' && !errorToast.hidden) {
 				hideErrorToast();
 			}
+
+			if (event.key === 'Escape' && !debugToast.hidden) {
+				hideDebugToast();
+			}
 		});
 
 		window.addEventListener('resize', () => {
@@ -3181,6 +3254,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			textSizeValue.textContent = Math.round(textScale * 100) + '%';
 			showTokenHeatmapToggleInput.checked = heatmapToggleVisible;
 			showOrphanToggleInput.checked = orphanToggleVisible;
+			debugMessagesInput.checked = debugMessagesEnabled;
 			syncHeatmapBaselineModelInput();
 			syncHeatmapThresholdInputs();
 
@@ -3219,6 +3293,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					heatmapBaselineModel,
 					heatmapMediumThreshold,
 					heatmapHighThreshold,
+					debugMessagesEnabled,
 				},
 			});
 		}
@@ -3309,6 +3384,20 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			errorToastMessage.textContent = '';
 		}
 
+		function showDebugToast(message) {
+			if (!debugMessagesEnabled) {
+				return;
+			}
+
+			debugToastMessage.textContent = message;
+			debugToast.hidden = false;
+		}
+
+		function hideDebugToast() {
+			debugToast.hidden = true;
+			debugToastMessage.textContent = '';
+		}
+
 		function renderGraphOverlay() {
 			const heatmapToggle = heatmapToggleVisible ? '<label class="graph-toggle" title="Show context token weight as a glow behind agent nodes"><input id="token-heatmap" type="checkbox" ' + (tokenHeatmapEnabled ? 'checked' : '') + '>Token heatmap</label>' : '';
 			const orphanToggle = orphanToggleVisible ? '<label class="graph-toggle" title="Highlight disconnected editable agents prompts and skills"><input id="orphan-highlight" type="checkbox" ' + (orphanHighlightEnabled ? 'checked' : '') + '>Identify orphans</label>' : '';
@@ -3389,6 +3478,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 		function renderGraph(graph, preserveEditor = false) {
 			activeGraph = graph;
+			renderedNodeHitAreas = [];
 			syncHeatmapBaselineModelInput();
 			setStatus(graph.nodes.length + ' nodes, ' + graph.links.length + ' edges');
 
@@ -3446,6 +3536,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const fallbackHeatmapMaxTokens = getFallbackHeatmapMaxTokens(graph);
 			const nodes = graph.nodes.map(node => {
 				const position = positions.get(node.id);
+
+				if (!position) {
+					return '';
+				}
+
+				renderedNodeHitAreas.push(getNodeHitArea(node, position));
 				const label = escapeHtml(node.label);
 				const modelLabel = node.uri && (node.type === 'agent' || node.type === 'prompt') ? formatModelLabel(node.model) : node.type === 'handoff' ? formatModelLabel(node.handoffModel) : '';
 				const audienceLabel = node.type === 'instruction' ? node.instructionAudience || 'AI' : '';
@@ -3523,13 +3619,48 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			installNodeSelection(graphSvg);
 
 			for (const nodeElement of graphElement.querySelectorAll('.node')) {
+				nodeElement.addEventListener('click', event => {
+					event.preventDefault();
+					event.stopPropagation();
+
+					const nodeId = readNodeElementId(nodeElement);
+
+					if (suppressedNodeClickId === nodeId) {
+						suppressedNodeClickId = undefined;
+						return;
+					}
+
+					selectNode(nodeId);
+				});
+
 				nodeElement.addEventListener('keydown', event => {
 					if (event.key === 'Enter' || event.key === ' ') {
 						event.preventDefault();
-						selectNode(nodeElement.dataset.nodeId);
+						selectNode(readNodeElementId(nodeElement));
 					}
 				});
 			}
+		}
+
+		function getNodeHitArea(node, position) {
+			if (node.type === 'instruction') {
+				return {
+					id: node.id,
+					type: 'rect',
+					x: position.x - 56 * nodeScale,
+					y: position.y - 28 * nodeScale,
+					width: 112 * nodeScale,
+					height: 76 * nodeScale,
+				};
+			}
+
+			return {
+				id: node.id,
+				type: 'circle',
+				x: position.x,
+				y: position.y,
+				radius: 36 * nodeScale,
+			};
 		}
 
 		function installNodeSelection(svg) {
@@ -3537,16 +3668,127 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
-			svg.addEventListener('click', event => {
-				const nodeElement = event.target?.closest?.('.node');
+			let nodePointerStart;
 
-				if (!nodeElement) {
+			svg.addEventListener('pointerdown', event => {
+				const nodeElement = getNodeElementFromEvent(event);
+				const nodeId = readNodeElementId(nodeElement) || getNodeIdAtClientPoint(svg, event.clientX, event.clientY);
+
+				if (!nodeId || event.button !== 0) {
+					debugGraphClick('pointerdown:miss', '', event, svg);
+					return;
+				}
+
+				debugGraphClick('pointerdown', nodeId, event, svg);
+
+				nodePointerStart = {
+					id: nodeId,
+					pointerId: event.pointerId,
+					x: event.clientX,
+					y: event.clientY,
+				};
+			});
+
+			svg.addEventListener('pointerup', event => {
+				const nodeElement = getNodeElementFromEvent(event);
+				const nodeId = readNodeElementId(nodeElement) || getNodeIdAtClientPoint(svg, event.clientX, event.clientY);
+
+				if (!nodePointerStart || nodePointerStart.pointerId !== event.pointerId || !nodeId) {
+					nodePointerStart = undefined;
+					return;
+				}
+
+				const movement = Math.hypot(event.clientX - nodePointerStart.x, event.clientY - nodePointerStart.y);
+
+				if (movement <= 4 && nodeId === nodePointerStart.id) {
+					suppressedNodeClickId = nodePointerStart.id;
+					selectNode(nodePointerStart.id);
+				}
+
+				nodePointerStart = undefined;
+			});
+
+			svg.addEventListener('pointercancel', () => {
+				nodePointerStart = undefined;
+			});
+
+			svg.addEventListener('click', event => {
+				const nodeElement = getNodeElementFromEvent(event);
+				const nodeId = readNodeElementId(nodeElement) || getNodeIdAtClientPoint(svg, event.clientX, event.clientY);
+
+				if (!nodeId) {
+					debugGraphClick('click:miss', '', event, svg);
 					return;
 				}
 
 				event.preventDefault();
-				selectNode(nodeElement.dataset.nodeId);
+				debugGraphClick('click', nodeId, event, svg);
+
+				if (suppressedNodeClickId === nodeId) {
+					suppressedNodeClickId = undefined;
+					return;
+				}
+
+				selectNode(nodeId);
 			});
+		}
+
+		function getNodeElementFromEvent(event) {
+			const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+
+			for (const entry of path) {
+				if (entry instanceof Element && entry.classList.contains('node')) {
+					return entry;
+				}
+			}
+
+			const target = event.target;
+
+			return target instanceof Element ? target.closest('.node') : undefined;
+		}
+
+		function readNodeElementId(nodeElement) {
+			return nodeElement?.getAttribute?.('data-node-id') || nodeElement?.dataset?.nodeId || '';
+		}
+
+		function getNodeIdAtClientPoint(svg, clientX, clientY) {
+			const point = getGraphPointFromClientPoint(svg, clientX, clientY);
+
+			if (!point) {
+				return '';
+			}
+
+			for (let index = renderedNodeHitAreas.length - 1; index >= 0; index -= 1) {
+				const hitArea = renderedNodeHitAreas[index];
+
+				if (isPointInNodeHitArea(point, hitArea)) {
+					return hitArea.id;
+				}
+			}
+
+			return '';
+		}
+
+		function getGraphPointFromClientPoint(svg, clientX, clientY) {
+			const bounds = svg.getBoundingClientRect();
+			const viewBox = svg.viewBox?.baseVal;
+
+			if (!bounds.width || !bounds.height || !viewBox) {
+				return undefined;
+			}
+
+			return {
+				x: viewBox.x + ((clientX - bounds.left) / bounds.width) * viewBox.width,
+				y: viewBox.y + ((clientY - bounds.top) / bounds.height) * viewBox.height,
+			};
+		}
+
+		function isPointInNodeHitArea(point, hitArea) {
+			if (hitArea.type === 'rect') {
+				return point.x >= hitArea.x && point.x <= hitArea.x + hitArea.width && point.y >= hitArea.y && point.y <= hitArea.y + hitArea.height;
+			}
+
+			return Math.hypot(point.x - hitArea.x, point.y - hitArea.y) <= hitArea.radius;
 		}
 
 		function getReciprocalLinkIds(links) {
@@ -3682,7 +3924,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
 			const childrenById = new Map(graph.nodes.map(node => [node.id, []]));
 			const incoming = new Map(graph.nodes.map(node => [node.id, 0]));
-			const hierarchicalLinks = graph.links.filter(link => link.type === 'uses-agent' || link.type === 'uses-handoff' || link.type === 'handoff-to-agent');
+			const hierarchicalLinks = getHierarchicalLayoutLinks(graph);
 
 			for (const link of hierarchicalLinks) {
 				if (!childrenById.has(link.source) || !nodeById.has(link.target)) {
@@ -3900,7 +4142,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			const nodeById = new Map(graph.nodes.map(node => [node.id, node]));
 			const childrenById = new Map(graph.nodes.map(node => [node.id, []]));
 			const incoming = new Map(graph.nodes.map(node => [node.id, 0]));
-			const hierarchicalLinks = graph.links.filter(link => link.type === 'uses-agent' || link.type === 'uses-handoff' || link.type === 'handoff-to-agent');
+			const hierarchicalLinks = getHierarchicalLayoutLinks(graph);
 
 			for (const link of hierarchicalLinks) {
 				if (!childrenById.has(link.source) || !nodeById.has(link.target)) {
@@ -3986,6 +4228,18 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			return positions;
+		}
+
+		function getHierarchicalLayoutLinks(graph) {
+			const handoffOwnerIds = new Map(graph.links.filter(link => link.type === 'uses-handoff').map(link => [link.target, link.source]));
+
+			return graph.links.filter(link => {
+				if (link.type !== 'uses-agent' && link.type !== 'uses-handoff' && link.type !== 'handoff-to-agent') {
+					return false;
+				}
+
+				return !(link.type === 'handoff-to-agent' && handoffOwnerIds.get(link.source) === link.target);
+			});
 		}
 
 		function layoutRadialGraph(graph, width) {
@@ -4180,15 +4434,143 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function selectNode(nodeId) {
+			if (!nodeId) {
+				showDebugToast('Selection failed\\nReason: empty node id');
+				showErrorToast('Unable to select node: the visualizer could not identify the clicked node.');
+				return;
+			}
+
 			const parentLink = activeGraph.links.find(link => link.type === 'has-hook-event' && link.target === nodeId);
 			const selectedId = parentLink?.source || nodeId;
+			const selectedNode = activeGraph.nodes.find(node => node.id === selectedId);
+
+			if (!selectedNode) {
+				const message = 'Unable to select node: ' + nodeId + ' is not present in the current graph.';
+
+				setStatus(message);
+				showDebugToast('Selection failed\\nRequested node id: ' + nodeId + '\\nSelected id: ' + selectedId + '\\nGraph nodes: ' + (activeGraph?.nodes?.length || 0) + '\\nGraph links: ' + (activeGraph?.links?.length || 0));
+				showErrorToast(message);
+				return;
+			}
+
+			showDebugToast(formatNodeDebugMessage('Node selected', selectedNode, {
+				requestedNodeId: nodeId,
+				selectedNodeId: selectedId,
+				parentHookNodeId: parentLink?.source || '',
+			}));
 
 			selectedNodeId = selectedId;
-			renderGraph(activeGraph);
-			renderEditor(activeGraph.nodes.find(node => node.id === selectedId));
+			renderGraph(activeGraph, true);
+			renderEditor(selectedNode, { reveal: true });
+
+			if (selectedNode && !isEditableNode(selectedNode)) {
+				showNodeSelectionError(selectedNode);
+			}
 		}
 
-		function renderEditor(node) {
+		function isEditableNode(node) {
+			return Boolean(node.uri) && (node.type === 'agent' || node.type === 'prompt' || node.type === 'instruction' || node.type === 'skill' || node.type === 'hook' || node.type === 'handoff');
+		}
+
+		function showNodeSelectionError(node) {
+			if (node.type !== 'agent') {
+				return;
+			}
+
+			const message = node.unresolved
+				? 'Unable to open sub-agent: no matching .agent.md file was found for ' + node.label + '.'
+				: 'Unable to open sub-agent: ' + node.label + ' is inferred from a reference and does not have an editable file.';
+
+			setStatus(message);
+			showDebugToast(formatNodeDebugMessage('Node selection cannot open editable file', node, { reason: message }));
+			showErrorToast(message);
+		}
+
+		function debugGraphClick(source, nodeId, event, svg) {
+			if (!debugMessagesEnabled) {
+				return;
+			}
+
+			const graphPoint = getGraphPointFromClientPoint(svg, event.clientX, event.clientY);
+			const node = nodeId ? activeGraph?.nodes?.find(candidate => candidate.id === nodeId) : undefined;
+			const target = event.target instanceof Element ? describeElement(event.target) : String(event.target || 'unknown');
+			const lines = [
+				'Graph click',
+				'Source: ' + source,
+				'Node id: ' + (nodeId || '<none>'),
+				'Target: ' + target,
+				'Client: ' + Math.round(event.clientX) + ', ' + Math.round(event.clientY),
+				'Graph: ' + (graphPoint ? Math.round(graphPoint.x) + ', ' + Math.round(graphPoint.y) : '<unavailable>'),
+				'Zoom: ' + graphZoom.toFixed(2),
+				'Pan: ' + Math.round(graphPanX) + ', ' + Math.round(graphPanY),
+				'Hit areas: ' + renderedNodeHitAreas.length,
+			];
+
+			if (node) {
+				lines.push('Label: ' + node.label, 'Type: ' + node.type, 'URI: ' + (node.uri || '<none>'), 'Full path: ' + formatFullPath(node.uri));
+			}
+
+			showDebugToast(lines.join('\\n'));
+		}
+
+		function formatNodeDebugMessage(title, node, extra = {}) {
+			const lines = [
+				title,
+				'Label: ' + (node.label || '<none>'),
+				'Type: ' + node.type,
+				'Node id: ' + node.id,
+				'Editable: ' + (isEditableNode(node) ? 'yes' : 'no'),
+				'Unresolved: ' + (node.unresolved ? 'yes' : 'no'),
+				'URI: ' + (node.uri || '<none>'),
+				'Full path: ' + formatFullPath(node.uri),
+				'Relative path: ' + (node.path || '<none>'),
+				'Graph nodes: ' + (activeGraph?.nodes?.length || 0),
+				'Graph links: ' + (activeGraph?.links?.length || 0),
+			];
+
+			for (const [key, value] of Object.entries(extra)) {
+				if (value !== undefined && value !== '') {
+					lines.push(key + ': ' + value);
+				}
+			}
+
+			return lines.join('\\n');
+		}
+
+		function formatFullPath(uri) {
+			if (!uri) {
+				return '<none>';
+			}
+
+			if (uri.startsWith('file:///')) {
+				let filePath = decodeURIComponent(uri.slice('file:///'.length));
+
+				if (filePath.length > 2 && filePath[0] === '/' && filePath[2] === ':') {
+					filePath = filePath.slice(1);
+				}
+
+				return filePath.split('/').join('\\\\');
+			}
+
+			return uri;
+		}
+
+		function describeElement(element) {
+			const id = element.id ? '#' + element.id : '';
+			const className = typeof element.className === 'string' && element.className ? '.' + element.className.trim().split(' ').filter(Boolean).join('.') : '';
+
+			return element.tagName.toLowerCase() + id + className;
+		}
+
+		function renderEditor(node, options = {}) {
+			try {
+				renderEditorContent(node, options);
+			} catch (error) {
+				renderEditorError(node, error, options);
+			}
+		}
+
+		function renderEditorContent(node, options = {}) {
 			if (!node) {
 				const hadEditor = workspacePanels.classList.contains('has-editor');
 				editorElement.hidden = true;
@@ -4204,7 +4586,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			const hadEditor = workspacePanels.classList.contains('has-editor');
 
-			const isEditable = Boolean(node.uri) && (node.type === 'agent' || node.type === 'prompt' || node.type === 'instruction' || node.type === 'skill' || node.type === 'hook' || node.type === 'handoff');
+			const isEditable = isEditableNode(node);
 			const modelField = isEditable && (node.type === 'agent' || node.type === 'prompt') ? renderModelField(node.model || '', node.type) : '';
 			const relationField = node.type === 'agent'
 				? renderAgentFlags(node.agents || [], node.id)
@@ -4294,7 +4676,13 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (openButton) {
-				openButton.addEventListener('click', () => vscode.postMessage({ type: 'node:open', uri: node.uri }));
+				openButton.addEventListener('click', () => {
+					showDebugToast(formatNodeDebugMessage('Open file requested', node, {
+						postedUri: node.uri || '',
+						postedFullPath: formatFullPath(node.uri),
+					}));
+					vscode.postMessage({ type: 'node:open', uri: node.uri });
+				});
 			}
 
 			if (openMcpButton) {
@@ -4347,6 +4735,64 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				});
 			}
 
+			if (options.reveal) {
+				revealEditor();
+			}
+
+			showDebugToast(formatNodeDebugMessage('Editor rendered', node, getEditorDebugState({ reveal: Boolean(options.reveal) })));
+
+		}
+
+		function renderEditorError(node, error, options = {}) {
+			const message = error instanceof Error ? error.message : String(error);
+			const hadEditor = workspacePanels.classList.contains('has-editor');
+
+			editorElement.hidden = false;
+			workspacePanels.classList.add('has-editor');
+			applyEditorTextScale();
+			editorElement.innerHTML = '<div class="editor-header">' +
+				'<div class="editor-title"><h3>' + escapeHtml(node?.label || 'Editor failed') + '</h3><p>' + escapeHtml(node?.path || node?.id || '') + '</p></div>' +
+				'<div class="editor-actions">' + (node?.uri ? '<button id="open-node" type="button">Open file</button>' : '') + '</div>' +
+			'</div>' +
+			'<div class="editor-body"><p class="editor-note">Unable to build the edit view: ' + escapeHtml(message) + '</p></div>';
+
+			const openButton = document.getElementById('open-node');
+
+			if (openButton && node?.uri) {
+				openButton.addEventListener('click', () => vscode.postMessage({ type: 'node:open', uri: node.uri }));
+			}
+
+			if (!hadEditor) {
+				scheduleSideBySideGraphRender();
+			}
+
+			if (options.reveal) {
+				revealEditor();
+			}
+
+			showDebugToast(formatNodeDebugMessage('Editor render failed', node, { error: message, ...getEditorDebugState({ reveal: Boolean(options.reveal) }) }));
+			showErrorToast('Unable to build the edit view: ' + message);
+		}
+
+		function revealEditor() {
+			requestAnimationFrame(() => {
+				editorElement.scrollIntoView({ block: sideBySideLayout ? 'nearest' : 'start', inline: 'nearest' });
+			});
+		}
+
+		function getEditorDebugState(extra = {}) {
+			const rect = editorElement.getBoundingClientRect();
+
+			return {
+				editorHidden: String(editorElement.hidden),
+				hasEditorClass: String(workspacePanels.classList.contains('has-editor')),
+				sideBySideLayout: String(sideBySideLayout),
+				editorChildCount: String(editorElement.childElementCount),
+				editorWidth: String(Math.round(rect.width)),
+				editorHeight: String(Math.round(rect.height)),
+				windowScrollY: String(Math.round(window.scrollY)),
+				...extra,
+			};
 		}
 
 		function renderHookCommandList(node) {
@@ -4512,7 +4958,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function saveNode(node) {
-			const isEditable = Boolean(node.uri) && (node.type === 'agent' || node.type === 'prompt' || node.type === 'instruction' || node.type === 'skill' || node.type === 'hook' || node.type === 'handoff');
+			const isEditable = isEditableNode(node);
 			const nameInput = document.getElementById('edit-name');
 			const bodyInput = document.getElementById('edit-body');
 
@@ -4629,10 +5075,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderAgentHandoffEditor(handoffs) {
-			const rows = handoffs.length
-				? handoffs.map((handoff, index) => renderHandoffEditorRow(handoff, index)).join('')
+			const handoffList = Array.isArray(handoffs) ? handoffs : [];
+			const rows = handoffList.length
+				? handoffList.map((handoff, index) => renderHandoffEditorRow(handoff, index)).join('')
 				: '<p class="editor-note handoff-empty">No handoffs configured for this agent.</p>';
-			const labels = handoffs.map(handoff => readHandoffProperty(handoff, 'label')).filter(Boolean);
+			const labels = handoffList.map(handoff => readHandoffProperty(handoff, 'label')).filter(Boolean);
 
 			return '<details class="choice-details"><summary>' + renderFieldLabel('Handoffs', fieldHelp.agentHandoffs) + renderSelectedHandoffPills(labels) + '</summary>' +
 				renderSelectedHandoffPills(labels) +
@@ -4809,11 +5256,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderAgentFlags(selectedAgents, currentNodeId) {
-			const selected = new Set(selectedAgents);
+			const safeSelectedAgents = Array.isArray(selectedAgents) ? selectedAgents : [];
+			const selected = new Set(safeSelectedAgents);
 			const availableAgents = (activeGraph?.nodes || [])
 				.filter(node => node.type === 'agent' && node.uri && node.id !== currentNodeId)
 				.map(node => node.label);
-			const agentNames = unique([...availableAgents, ...selectedAgents]).sort((left, right) => left.localeCompare(right));
+			const agentNames = unique([...availableAgents, ...safeSelectedAgents]).sort((left, right) => left.localeCompare(right));
 
 			if (!agentNames.length) {
 				return '<div><div class="field-label">' + renderFieldLabel('Agents', fieldHelp.agentAgents) + '</div><p class="choice-empty">No available agents found.</p></div>';
@@ -4823,9 +5271,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderToolFlags(selectedTools, availableTools) {
-			const selected = new Set(selectedTools);
-			const descriptions = new Map(availableTools.map(tool => [tool.name, tool.description || tool.name]));
-			const toolNames = unique([...availableTools.map(tool => tool.name), ...selectedTools]).sort((left, right) => left.localeCompare(right));
+			const safeSelectedTools = Array.isArray(selectedTools) ? selectedTools : [];
+			const safeAvailableTools = Array.isArray(availableTools) ? availableTools : [];
+			const selected = new Set(safeSelectedTools);
+			const descriptions = new Map(safeAvailableTools.map(tool => [tool.name, tool.description || tool.name]));
+			const toolNames = unique([...safeAvailableTools.map(tool => tool.name), ...safeSelectedTools]).sort((left, right) => left.localeCompare(right));
 			const presetButtons = renderToolPresetButtons();
 
 			if (!toolNames.length) {
@@ -4928,7 +5378,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (!Array.isArray(editedToolsByNodeId[node.id])) {
-				editedToolsByNodeId[node.id] = unique((node.tools || []).filter(tool => !isMcpServerToolReference(tool)));
+				const tools = Array.isArray(node.tools) ? node.tools : [];
+				editedToolsByNodeId[node.id] = unique(tools.filter(tool => !isMcpServerToolReference(tool)));
 			}
 
 			return editedToolsByNodeId[node.id];
@@ -5707,6 +6158,37 @@ async function getFileStat(uri: vscode.Uri): Promise<vscode.FileStat | undefined
 	} catch {
 		return undefined;
 	}
+}
+
+function formatOperationError(prefix: string, error: unknown): string {
+	const details = error instanceof Error ? error.message : String(error);
+
+	return details ? `${prefix}: ${details}` : prefix;
+}
+
+function isWorkspaceResourceUri(uri: vscode.Uri): boolean {
+	if (vscode.workspace.getWorkspaceFolder(uri)) {
+		return true;
+	}
+
+	if (uri.scheme !== 'file') {
+		return false;
+	}
+
+	const candidatePath = normalizeResourcePath(uri.fsPath);
+
+	return Boolean(vscode.workspace.workspaceFolders?.some(folder => {
+		const folderPath = normalizeResourcePath(folder.uri.fsPath);
+		const folderPrefix = folderPath.endsWith(path.sep) ? folderPath : `${folderPath}${path.sep}`;
+
+		return candidatePath === folderPath || candidatePath.startsWith(folderPrefix);
+	}));
+}
+
+function normalizeResourcePath(value: string): string {
+	const normalized = path.normalize(value);
+
+	return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 function findOpenTextTabViewColumn(uri: vscode.Uri): vscode.ViewColumn | undefined {
