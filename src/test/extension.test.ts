@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import matter = require('gray-matter');
 import * as vscode from 'vscode';
-import { createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, isToolChoiceVisibleForFilter, normalizePostedHandoffs, parseHandoffsInput, parseLines, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
+import { createCustomizationMarkdown, createHookCustomizationJson, createSavedToolsList, getCustomizationFileName, getCustomizationFolderUri, isToolChoiceVisibleForFilter, normalizePostedHandoffs, parseHandoffsInput, parseLines, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
 import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 
 suite('Extension Test Suite', () => {
@@ -405,6 +405,11 @@ suite('Extension Test Suite', () => {
 	test('keeps hidden filtered tool rows from overriding display none', () => {
 		assert.match(toolChoiceHiddenCssRule, /\.tool-choice-list\s+\.choice-check\[hidden\]/);
 		assert.match(toolChoiceHiddenCssRule, /display:\s*none/);
+	});
+
+	test('saves selected tools from the edit section', () => {
+		assert.deepStrictEqual(createSavedToolsList([' search ', 'read', 'read', ''], ['playwright/*', 'codebase'], true), ['search', 'read', 'playwright/*']);
+		assert.deepStrictEqual(createSavedToolsList(['search'], ['playwright/*'], false), ['search']);
 	});
 
 	test('parses comma newline and array line inputs into unique trimmed values', () => {

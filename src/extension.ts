@@ -124,6 +124,19 @@ export function isToolChoiceVisibleForFilter(toolName: string, filterValue: stri
 	return !normalizedFilter || toolName.toLowerCase().includes(normalizedFilter);
 }
 
+export function isMcpServerToolReference(toolName: unknown): boolean {
+	return typeof toolName === 'string' && toolName.endsWith('/*');
+}
+
+export function createSavedToolsList(selectedTools: unknown, existingTools: unknown, preserveMcpServerReferences = false): string[] {
+	const normalizeToolList = (value: unknown): string[] => Array.isArray(value)
+		? unique(value.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean))
+		: [];
+	const preservedTools = preserveMcpServerReferences ? normalizeToolList(existingTools).filter(isMcpServerToolReference) : [];
+
+	return unique([...normalizeToolList(selectedTools), ...preservedTools]);
+}
+
 function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
 	const record = typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
 	const heatmapHighThreshold = readNumberInRange(record.heatmapHighThreshold, 0.02, 0.99, defaultVisualizerSettings.heatmapHighThreshold);
@@ -2837,6 +2850,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		let pendingSaveScrollState;
 		let toolFilterValue = '';
 		let toolFilterTimeout;
+		const editedToolsByNodeId = {};
 		let resizeTimeout;
 		const colors = {
 			agent: 'var(--agent)',
@@ -2869,6 +2883,8 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			{ name: 'timeout', description: 'Timeout in seconds. Default is 30.', placeholder: '30' },
 		];
 		${isToolChoiceVisibleForFilter.toString()}
+		${isMcpServerToolReference.toString()}
+		${createSavedToolsList.toString()}
 		const fieldHelp = {
 			agentName: 'Custom agent name. If not specified, VS Code uses the file name.',
 			promptName: 'Prompt name used after typing / in chat. If not specified, VS Code uses the file name.',
@@ -4168,7 +4184,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					? '<label>' + renderFieldLabel('Agent mode', fieldHelp.promptAgent) + '<select id="edit-agent">' + renderPromptAgentOptions(node.agent || '') + '</select></label>'
 					: '';
 			const toolsField = node.type === 'agent' || node.type === 'prompt'
-				? renderToolFlags((node.tools || []).filter(tool => !isMcpServerToolReference(tool)), activeGraph?.availableTools || [])
+				? renderToolFlags(getEditedTools(node), activeGraph?.availableTools || [])
 				: '';
 			const userInvocableField = node.type === 'agent' || node.type === 'skill'
 				? '<label class="checkbox-label"><input id="edit-user-invocable" type="checkbox" ' + (node.userInvocable === false ? '' : 'checked') + '>' + renderFieldLabel('User invocable', fieldHelp.userInvocable) + '</label>'
@@ -4233,6 +4249,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			if (toolList) {
 				toolList.addEventListener('change', event => {
 					if (event.target?.classList?.contains('edit-tool')) {
+						setEditedTools(node, getCheckedToolsFromDom());
 						updateActiveToolPills();
 					}
 				});
@@ -4497,7 +4514,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				handoffIndex: node.handoffIndex,
 				name: nameInput.value,
 				agents: getCheckedAgents(),
-				tools: unique([...getCheckedTools(), ...(node.type === 'agent' ? (node.tools || []).filter(isMcpServerToolReference) : [])]),
+				tools: createSavedToolsList(getEditedTools(node), node.tools || [], node.type === 'agent'),
 				model: document.getElementById('edit-model')?.value,
 				handoffModel: node.type === 'handoff' ? document.getElementById('edit-model')?.value : undefined,
 				userInvocable: document.getElementById('edit-user-invocable')?.checked,
@@ -4868,7 +4885,33 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function getCheckedTools() {
+			const node = activeGraph?.nodes.find(candidate => candidate.id === selectedNodeId);
+
+			return node ? getEditedTools(node) : getCheckedToolsFromDom();
+		}
+
+		function getCheckedToolsFromDom() {
 			return [...editorElement.querySelectorAll('.edit-tool:checked')].map(tool => tool.value);
+		}
+
+		function getEditedTools(node) {
+			if (!node || (node.type !== 'agent' && node.type !== 'prompt')) {
+				return [];
+			}
+
+			if (!Array.isArray(editedToolsByNodeId[node.id])) {
+				editedToolsByNodeId[node.id] = unique((node.tools || []).filter(tool => !isMcpServerToolReference(tool)));
+			}
+
+			return editedToolsByNodeId[node.id];
+		}
+
+		function setEditedTools(node, tools) {
+			if (!node || (node.type !== 'agent' && node.type !== 'prompt')) {
+				return;
+			}
+
+			editedToolsByNodeId[node.id] = unique(tools.filter(Boolean));
 		}
 
 		function getCheckedAgents() {
@@ -4903,15 +4946,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
-		function isMcpServerToolReference(toolName) {
-			return typeof toolName === 'string' && toolName.endsWith('/*');
-		}
-
 		function addCustomTool() {
 			const customToolName = document.getElementById('custom-tool-name');
 			const toolList = document.getElementById('tool-check-list');
 			const name = customToolName?.value.trim();
 			const existingTool = [...editorElement.querySelectorAll('.edit-tool')].find(tool => tool.value === name);
+			const node = activeGraph?.nodes.find(candidate => candidate.id === selectedNodeId);
 
 			if (!name || !toolList) {
 				return;
@@ -4919,6 +4959,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			if (existingTool) {
 				existingTool.checked = true;
+				setEditedTools(node, getCheckedToolsFromDom());
 				updateActiveToolPills();
 				customToolName.value = '';
 				customToolName.focus();
@@ -4926,6 +4967,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			toolList.insertAdjacentHTML('beforeend', renderToolCheckbox(name, true, 'Custom tool. Uncheck it to remove it when saving.'));
+			setEditedTools(node, getCheckedToolsFromDom());
 			updateActiveToolPills();
 			filterToolChoices();
 			customToolName.value = '';
@@ -4935,6 +4977,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		function applyToolPreset(presetIndex) {
 			const preset = toolPresets[Number(presetIndex)];
 			const toolList = document.getElementById('tool-check-list');
+			const node = activeGraph?.nodes.find(candidate => candidate.id === selectedNodeId);
 
 			if (!preset || !toolList) {
 				return;
@@ -4952,6 +4995,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				toolInput.checked = presetTools.has(toolInput.value);
 			}
 
+			setEditedTools(node, getCheckedToolsFromDom());
 			updateActiveToolPills();
 			filterToolChoices();
 		}

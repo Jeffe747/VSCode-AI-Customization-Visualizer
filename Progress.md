@@ -2,6 +2,8 @@
 # Tasks
 
 # Done
+- Added a test that verifies the Tools edit section saves selected tools.
+- Fixed the Tools edit section so selected tools are preserved and saved from edit state.
 - Changed the default handoff visualization color to RGB(182,135,99).
 - Changed the default instruction visualization color to RGB(3,159,170).
 - Restored graph node click highlighting by suppressing the native SVG focus rectangle that left a persistent white box.
