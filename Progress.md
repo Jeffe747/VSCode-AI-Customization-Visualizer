@@ -2,6 +2,7 @@
 # Tasks
 
 # Done
+- Fixed agent selection in the visualizer by adding reliable SVG node hit targets and delegated node clicks.
 - Added a test that verifies the Tools edit section saves selected tools.
 - Fixed the Tools edit section so selected tools are preserved and saved from edit state.
 - Changed the default handoff visualization color to RGB(182,135,99).

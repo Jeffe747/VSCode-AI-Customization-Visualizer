@@ -2442,6 +2442,12 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			stroke-width: 2;
 		}
 
+		.node .node-hit-target {
+			fill: transparent;
+			stroke: none;
+			pointer-events: all;
+		}
+
 		.node .node-backer {
 			fill: var(--vscode-sideBar-background);
 			stroke: none;
@@ -3465,6 +3471,9 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				const contextLabel = node.type === 'agent' && node.uri && node.userInvocable !== false && node.contextEstimateTokens ? formatContextEstimate(node.contextEstimateTokens) : '';
 				const hookEventCount = node.type === 'hook-event' && node.hookEventCommandCount ? node.hookEventCommandCount + ' cmd' : '';
 				const heatmapGlow = getHeatmapGlow(node, fallbackHeatmapMaxTokens, isInvocableAgent);
+				const hitTarget = node.type === 'instruction'
+					? '<rect class="node-hit-target" x="-56" y="-28" width="112" height="76" rx="8"></rect>'
+					: '<circle class="node-hit-target" r="36"></circle>';
 				const shape = node.type === 'instruction'
 					? '<rect class="node-shape instruction-area" x="-48" y="-22" width="96" height="44" rx="8" fill="' + fillColor + '"></rect>'
 					: node.type === 'hook-event'
@@ -3490,6 +3499,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return '<g class="' + className + '" data-node-id="' + escapeAttribute(node.id) + '" transform="translate(' + position.x + ' ' + position.y + ')" tabindex="0" role="button" aria-label="Edit ' + escapeAttribute(node.label) + '">' +
 					'<title>' + escapeHtml(title) + '</title>' +
 					'<g transform="scale(' + nodeScale + ')">' +
+					hitTarget +
 					heatmapGlow +
 					shape +
 					agentMarker +
@@ -3508,10 +3518,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			graphElement.innerHTML = renderGraphOverlay() + '<svg width="100%" height="' + viewportHeight + '" viewBox="' + getGraphViewBox(viewportWidth, viewportHeight) + '" role="img" aria-label="Copilot AI customization graph">' + edges + nodes + '</svg>';
 			installGraphOverlayControls();
-			installGraphNavigation(graphElement.querySelector('svg'), viewportWidth, viewportHeight, layoutWidth, contentHeight);
+			const graphSvg = graphElement.querySelector('svg');
+			installGraphNavigation(graphSvg, viewportWidth, viewportHeight, layoutWidth, contentHeight);
+			installNodeSelection(graphSvg);
 
 			for (const nodeElement of graphElement.querySelectorAll('.node')) {
-				nodeElement.addEventListener('click', () => selectNode(nodeElement.dataset.nodeId));
 				nodeElement.addEventListener('keydown', event => {
 					if (event.key === 'Enter' || event.key === ' ') {
 						event.preventDefault();
@@ -3519,6 +3530,23 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 					}
 				});
 			}
+		}
+
+		function installNodeSelection(svg) {
+			if (!svg) {
+				return;
+			}
+
+			svg.addEventListener('click', event => {
+				const nodeElement = event.target?.closest?.('.node');
+
+				if (!nodeElement) {
+					return;
+				}
+
+				event.preventDefault();
+				selectNode(nodeElement.dataset.nodeId);
+			});
 		}
 
 		function getReciprocalLinkIds(links) {
