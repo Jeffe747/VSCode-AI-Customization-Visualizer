@@ -1,4 +1,5 @@
 # Done
+- Refactored the bloated extension entrypoint into focused modules for activation wiring, webview orchestration, HTML rendering, settings, scanning, diagnostics, persistence, customization helpers, tools, hooks, handoffs, paths, and VS Code resource utilities, leaving extension.ts as a thin lifecycle shim.
 - Canonicalized tool lists across file reads, editor state, and saves so raw built-in tool IDs like execute/getTerminalOutput and execute/runInTerminal no longer appear in the Tools UI.
 - Made the default displayed tool choices use the curated VS Code custom-agent aliases, added General/Planning/Implementation/Test role presets, and kept arbitrary custom tool strings supported. [execute,read,edit,search,agent,web,todo].
 - Added a tools preselector title above the preselect buttons so they no longer look like they are part of the "Agents" section.
