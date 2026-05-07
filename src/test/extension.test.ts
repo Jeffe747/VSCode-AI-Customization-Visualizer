@@ -1,8 +1,13 @@
 import * as assert from 'assert';
 import matter = require('gray-matter');
 import * as vscode from 'vscode';
-import { createCustomizationMarkdown, createHookCustomizationJson, createSavedToolsList, getCustomizationFileName, getCustomizationFolderUri, getDefaultAvailableTools, getDefaultToolPresets, isToolChoiceVisibleForFilter, normalizePostedHandoffs, normalizePostedHookCommandProperties, parseHandoffsInput, parseLines, readHookCommandProperties, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
+import { agentBodyPlaceholder, agentDescriptionPlaceholder, cleanAgentPlaceholderText, createCustomizationMarkdown, createHookCustomizationJson, getCustomizationFileName, getCustomizationFolderUri, stringifyCustomizationMarkdown } from '../customizations/factory';
+import { normalizePostedHandoffs, parseHandoffsInput, validateRequiredHandoffFields } from '../customizations/handoffs';
+import { getHookConfigName, normalizePostedHookCommandProperties, readHookCommandProperties, readHookCommands, readHookEvents, readPostedHookCommands } from '../customizations/hooks';
+import { extractToolReferences, getFileKind, getFileName, isHookFilePath, isInstructionFilePath, isSkillFilePath, normalizeFrontmatter, uniqueUris } from '../customizations/paths';
 import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
+import { createSavedToolsList, getDefaultAvailableTools, getDefaultToolPresets, isToolChoiceVisibleForFilter, toolChoiceHiddenCssRule } from '../tools/catalog';
+import { parseLines } from '../utils/values';
 
 suite('Extension Test Suite', () => {
 	test('maps agent references into hierarchy links', () => {
@@ -312,6 +317,34 @@ suite('Extension Test Suite', () => {
 		assert.ok(node.skillIssues?.some(issue => issue.includes('parent directory')));
 	});
 
+	test('classifies customization file paths through extracted path helpers', () => {
+		assert.strictEqual(getFileKind(vscode.Uri.file('/workspace/.github/agents/planner.agent.md')), 'agent');
+		assert.strictEqual(getFileKind(vscode.Uri.file('/workspace/.github/prompts/review.prompt.md')), 'prompt');
+		assert.strictEqual(getFileKind(vscode.Uri.file('/workspace/.github/skills/web/SKILL.md')), 'skill');
+		assert.strictEqual(getFileKind(vscode.Uri.file('/workspace/.github/instructions/typescript.instructions.md')), 'instruction');
+		assert.strictEqual(getFileKind(vscode.Uri.file('/workspace/.github/hooks/guard.json')), undefined);
+		assert.strictEqual(isSkillFilePath('/workspace/.github/skills/web/SKILL.md'), true);
+		assert.strictEqual(isSkillFilePath('/workspace/.github/skills/SKILL.md'), false);
+		assert.strictEqual(isInstructionFilePath('/workspace/AGENTS.md'), true);
+		assert.strictEqual(isInstructionFilePath('/workspace/.github/hooks/guard.json'), false);
+		assert.strictEqual(isHookFilePath('/workspace/.github/hooks/guard.json'), true);
+		assert.strictEqual(isHookFilePath('/workspace/.claude/settings.local.json'), true);
+	});
+
+	test('normalizes customization path metadata for scanner inputs', () => {
+		const namedUri = vscode.Uri.file('/workspace/.github/agents/file-name.agent.md');
+		const skillUri = vscode.Uri.file('/workspace/.github/skills/web-testing/SKILL.md');
+		const duplicateUri = vscode.Uri.file('/workspace/.github/prompts/review.prompt.md');
+
+		assert.strictEqual(getFileName(namedUri, 'agent', { name: 'Planning Agent' }), 'Planning Agent');
+		assert.strictEqual(getFileName(namedUri, 'agent', {}), 'file-name');
+		assert.strictEqual(getFileName(skillUri, 'skill', {}), 'web-testing');
+		assert.deepStrictEqual(normalizeFrontmatter({ name: 'Agent' }), { name: 'Agent' });
+		assert.deepStrictEqual(normalizeFrontmatter(['not', 'frontmatter']), {});
+		assert.deepStrictEqual(extractToolReferences('Use #tool:read and #tool:web.fetch and #tool:read again.'), ['read', 'web.fetch']);
+		assert.deepStrictEqual(uniqueUris([duplicateUri, duplicateUri]).map(uri => uri.toString()), [duplicateUri.toString()]);
+	});
+
 	test('creates expected customization file names', () => {
 		assert.strictEqual(getCustomizationFileName('agent', 'Project Orchestrator'), 'project-orchestrator.agent.md');
 		assert.strictEqual(getCustomizationFileName('prompt', 'Review API!'), 'review-api.prompt.md');
@@ -368,6 +401,14 @@ suite('Extension Test Suite', () => {
 
 		assert.strictEqual(hook.name, 'Tool Guard');
 		assert.deepStrictEqual(hooks.PreToolUse, []);
+	});
+
+	test('cleans starter agent placeholder text before saving', () => {
+		assert.strictEqual(cleanAgentPlaceholderText(agentDescriptionPlaceholder), '');
+		assert.strictEqual(cleanAgentPlaceholderText(agentBodyPlaceholder), '');
+		assert.strictEqual(cleanAgentPlaceholderText(`# Worker\n\n${agentBodyPlaceholder}`), '');
+		assert.strictEqual(cleanAgentPlaceholderText(undefined, 'Existing body.'), 'Existing body.');
+		assert.strictEqual(cleanAgentPlaceholderText('Keep these real instructions.'), 'Keep these real instructions.');
 	});
 
 	test('saves agent tools as an inline frontmatter list', () => {
@@ -450,6 +491,13 @@ suite('Extension Test Suite', () => {
 		]);
 	});
 
+	test('returns independent built-in tool preset copies', () => {
+		const firstRead = getDefaultToolPresets();
+		firstRead[0].tools.push('mutated');
+
+		assert.deepStrictEqual(getDefaultToolPresets()[0], { label: 'General', tools: ['execute', 'read', 'edit', 'search', 'agent', 'web', 'todo'] });
+	});
+
 	test('parses comma newline and array line inputs into unique trimmed values', () => {
 		assert.deepStrictEqual(parseLines(' search, read\nread\n custom-tool '), ['search', 'read', 'custom-tool']);
 		assert.deepStrictEqual(parseLines([' search ', 'read', 'read', 7]), ['search', 'read']);
@@ -504,6 +552,61 @@ suite('Extension Test Suite', () => {
 	test('reads legacy hook timeoutSec values into the editable timeout field', () => {
 		assert.deepStrictEqual(readHookCommandProperties({ timeoutSec: 45 }), { timeout: '45' });
 		assert.deepStrictEqual(readHookCommandProperties({ timeoutSec: '90' }), { timeout: '90' });
+	});
+
+	test('reads hook events and commands through extracted hook helpers', () => {
+		const hooks = {
+			Stop: [
+				{ command: 'echo done' },
+			],
+			PreToolUse: [
+				{ name: 'Validate tool', command: './validate.sh', cwd: 'scripts', timeout: 20, env: { NODE_ENV: 'test' }, hooks: [{}, {}] },
+			],
+			UnknownEvent: [
+				{ command: 'ignored' },
+			],
+		};
+
+		const events = readHookEvents(hooks);
+		const commands = readHookCommands(hooks);
+
+		assert.deepStrictEqual(events.map(event => event.name), ['PreToolUse', 'Stop']);
+		assert.strictEqual(events[0].commandCount, 2);
+		assert.strictEqual(events[0].variableDriven, true);
+		assert.strictEqual(events[1].commandCount, 1);
+		assert.strictEqual(commands.length, 2);
+		assert.deepStrictEqual(commands[0], {
+			id: 'PreToolUse:0',
+			event: 'PreToolUse',
+			index: 0,
+			name: 'Validate tool',
+			command: './validate.sh',
+			properties: {
+				command: './validate.sh',
+				cwd: 'scripts',
+				timeout: '20',
+				env: '{"NODE_ENV":"test"}',
+			},
+		});
+		assert.strictEqual(commands[1].id, 'Stop:0');
+	});
+
+	test('reads posted hook commands with safe defaults', () => {
+		assert.deepStrictEqual(readPostedHookCommands('not-json'), []);
+		assert.deepStrictEqual(readPostedHookCommands('{"id":"PreToolUse:0"}'), []);
+		assert.deepStrictEqual(readPostedHookCommands('[{"id":"custom","event":"Unknown","properties":{"command":"npm test"}}]'), [
+			{
+				id: 'custom',
+				event: 'PreToolUse',
+				properties: { command: 'npm test' },
+			},
+		]);
+	});
+
+	test('derives hook config display names from supported sources', () => {
+		assert.strictEqual(getHookConfigName('.github/hooks/notify.json'), 'notify');
+		assert.strictEqual(getHookConfigName('.claude/settings.json'), '.claude/settings.json');
+		assert.strictEqual(getHookConfigName('C:\\repo\\.github\\hooks\\guard.json'), 'guard');
 	});
 
 	test('saves legacy posted hook timeoutSec values as timeout', () => {
