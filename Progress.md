@@ -1,12 +1,11 @@
 # Tasks
 
 # Done
-- Fixed sub-agent edit view failures caused by bundled helper renaming by defining the tool-filter and MCP tool-reference helpers directly inside the webview script.
-- Fixed selected nodes not showing the edit view by rendering the graph without clearing editor state, explicitly revealing the editor, adding editor render diagnostics, and hardening agent edit sections against non-array data.
-- Added a Debug messages setting and dedicated debug toast that reports graph click details, selected node metadata, full file URI/path, editability, graph counts, and Open file requests.
-- Reworked graph node selection with coordinate-based SVG hit testing so agent and sub-agent clicks are detected even when SVG event targets are unreliable.
-- Fixed sub-agent node clicks to select through direct node handlers, and show a toast when a sub-agent is inferred/unresolved and has no editable file.
-- Hardened graph node selection so agent nodes open reliably even after pointer/pan interactions.
+- Canonicalized tool lists across file reads, editor state, and saves so raw built-in tool IDs like execute/getTerminalOutput and execute/runInTerminal no longer appear in the Tools UI.
+- Made the default displayed tool choices use the curated VS Code custom-agent aliases, added General/Planning/Implementation/Test role presets, and kept arbitrary custom tool strings supported. [execute,read,edit,search,agent,web,todo].
+- Added a tools preselector title above the preselect buttons so they no longer look like they are part of the "Agents" section.
+- Made the tool preselect buttons visible even when the Tools section is collapsed.
+- Fixed hook timeout editing so legacy `timeoutSec` values display and save as the correct `timeout` property.
 - Made save failures report visible webview errors instead of failing silently.
 - Made Open file report invalid selections, normalize workspace URI matching more robustly, and explicitly focus opened editors.
 - Added toast error reporting for node open and save failures.

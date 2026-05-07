@@ -41,6 +41,28 @@ interface ReadProblem {
 	details: string;
 }
 
+interface ToolPresetDefinition {
+	label: string;
+	tools: string[];
+}
+
+const curatedDefaultAvailableTools: AvailableTool[] = [
+	{ name: 'execute', description: 'Run commands in the integrated terminal.' },
+	{ name: 'read', description: 'Read files, problems, and code context.' },
+	{ name: 'edit', description: 'Create and update files in the workspace.' },
+	{ name: 'search', description: 'Search code, symbols, and workspace content.' },
+	{ name: 'agent', description: 'Invoke built-in or custom agents and subagents.' },
+	{ name: 'web', description: 'Fetch and review external web content.' },
+	{ name: 'todo', description: 'Track and update the current task plan.' },
+];
+
+const defaultToolPresets: ToolPresetDefinition[] = [
+	{ label: 'General', tools: ['execute', 'read', 'edit', 'search', 'agent', 'web', 'todo'] },
+	{ label: 'Planning', tools: ['read', 'search', 'web', 'todo'] },
+	{ label: 'Implementation', tools: ['execute', 'read', 'edit', 'search', 'web', 'todo'] },
+	{ label: 'Test', tools: ['execute', 'read', 'edit', 'search', 'todo'] },
+];
+
 const visualizerColorDefinitions: VisualizerColorDefinition[] = [
 	{ key: 'instruction', label: 'Instructions', description: 'Instruction file areas' },
 	{ key: 'skill', label: 'Skills', description: 'Agent skill nodes' },
@@ -130,13 +152,93 @@ export function isMcpServerToolReference(toolName: unknown): boolean {
 	return typeof toolName === 'string' && toolName.endsWith('/*');
 }
 
-export function createSavedToolsList(selectedTools: unknown, existingTools: unknown, preserveMcpServerReferences = false): string[] {
-	const normalizeToolList = (value: unknown): string[] => Array.isArray(value)
-		? unique(value.filter((item): item is string => typeof item === 'string').map(item => item.trim()).filter(Boolean))
-		: [];
-	const preservedTools = preserveMcpServerReferences ? normalizeToolList(existingTools).filter(isMcpServerToolReference) : [];
+export function normalizeDisplayedToolName(toolName: unknown): string | undefined {
+	if (typeof toolName !== 'string') {
+		return undefined;
+	}
 
-	return unique([...normalizeToolList(selectedTools), ...preservedTools]);
+	const normalizedName = toolName.trim();
+
+	if (!normalizedName) {
+		return undefined;
+	}
+
+	return getCuratedToolAlias(normalizedName) || normalizedName;
+}
+
+export function normalizeDisplayedToolList(value: unknown): string[] {
+	return Array.isArray(value)
+		? unique(value.map(item => normalizeDisplayedToolName(item)).filter((item): item is string => Boolean(item)))
+		: [];
+}
+
+export function createSavedToolsList(selectedTools: unknown, existingTools: unknown, preserveMcpServerReferences = false): string[] {
+	const preservedTools = preserveMcpServerReferences ? normalizeDisplayedToolList(existingTools).filter(isMcpServerToolReference) : [];
+
+	return unique([...normalizeDisplayedToolList(selectedTools), ...preservedTools]);
+}
+
+export function getDefaultAvailableTools(vscodeTools: AvailableTool[], customTools: AvailableTool[] = []): AvailableTool[] {
+	const merged = new Map<string, AvailableTool>();
+
+	for (const tool of curatedDefaultAvailableTools) {
+		merged.set(tool.name, { ...tool });
+	}
+
+	for (const tool of vscodeTools) {
+		const alias = getCuratedToolAlias(tool.name);
+
+		if (!alias) {
+			continue;
+		}
+
+		const existing = merged.get(alias);
+
+		if (existing) {
+			if (!existing.description && tool.description) {
+				merged.set(alias, { ...existing, description: tool.description });
+			}
+
+			continue;
+		}
+
+		merged.set(alias, {
+			name: alias,
+			description: tool.description,
+		});
+	}
+
+	for (const tool of customTools) {
+		const normalizedName = normalizeDisplayedToolName(tool.name);
+
+		if (!normalizedName) {
+			continue;
+		}
+
+		const existing = merged.get(normalizedName);
+
+		if (existing) {
+			if (!existing.description && tool.description) {
+				merged.set(normalizedName, { ...existing, description: tool.description });
+			}
+
+			continue;
+		}
+
+		merged.set(normalizedName, {
+			...tool,
+			name: normalizedName,
+		});
+	}
+
+	return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function getDefaultToolPresets(): ToolPresetDefinition[] {
+	return defaultToolPresets.map(preset => ({
+		label: preset.label,
+		tools: [...preset.tools],
+	}));
 }
 
 function normalizeVisualizerSettings(value: unknown): VisualizerSettings {
@@ -355,7 +457,7 @@ class WorkspaceScanner {
 				frontmatter,
 				body: parsed.content,
 				agents: kind === 'agent' ? readStringArray(frontmatter.agents) : [],
-				tools: kind === 'instruction' ? [] : unique([...readStringArray(frontmatter.tools), ...extractToolReferences(parsed.content)]),
+				tools: kind === 'instruction' ? [] : normalizeDisplayedToolList([...readStringArray(frontmatter.tools), ...extractToolReferences(parsed.content)]),
 				model: readModel(frontmatter.model),
 				userInvocable: kind === 'agent' || kind === 'skill' ? readBoolean(frontmatter['user-invocable']) : undefined,
 				agent: kind === 'prompt' ? readString(frontmatter.agent) : undefined,
@@ -686,22 +788,16 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private getAvailableTools(graph: GraphJson): AvailableTool[] {
-		const tools = new Map<string, AvailableTool>();
+		const vscodeTools: AvailableTool[] = [];
 
 		for (const tool of vscode.lm.tools) {
-			tools.set(tool.name, {
+			vscodeTools.push({
 				name: tool.name,
 				description: tool.description,
 			});
 		}
 
-		for (const tool of graph.availableTools) {
-			if (!tools.has(tool.name)) {
-				tools.set(tool.name, tool);
-			}
-		}
-
-		return [...tools.values()].sort((left, right) => left.name.localeCompare(right.name));
+		return getDefaultAvailableTools(vscodeTools, graph.availableTools);
 	}
 
 	private async getAvailableModels(graph: GraphJson): Promise<AvailableModel[]> {
@@ -2176,11 +2272,24 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			margin-top: 8px;
 		}
 
+		.tool-preset-section {
+			margin-top: 8px;
+		}
+
+		.tool-preset-title {
+			margin-bottom: 4px;
+			color: var(--vscode-descriptionForeground);
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: 0.03em;
+			text-transform: uppercase;
+		}
+
 		.tool-preset-list {
 			display: flex;
 			flex-wrap: wrap;
 			gap: 6px;
-			margin-top: 8px;
+			margin-top: 0;
 		}
 
 		.tool-preset-button {
@@ -2941,13 +3050,63 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			return typeof toolName === 'string' && toolName.endsWith('/*');
 		}
 
-		function createSavedToolsList(selectedTools, existingTools, preserveMcpServerReferences = false) {
-			const normalizeToolList = value => Array.isArray(value)
-				? unique(value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean))
-				: [];
-			const preservedTools = preserveMcpServerReferences ? normalizeToolList(existingTools).filter(isMcpServerToolReference) : [];
+		function getCuratedToolAlias(toolName) {
+			const normalizedName = typeof toolName === 'string' ? toolName.trim() : '';
 
-			return unique([...normalizeToolList(selectedTools), ...preservedTools]);
+			if (!normalizedName) {
+				return undefined;
+			}
+
+			if (['execute', 'read', 'edit', 'search', 'agent', 'web', 'todo'].includes(normalizedName)) {
+				return normalizedName;
+			}
+
+			const aliasByPrefix = [
+				['agent/', 'agent'],
+				['edit/', 'edit'],
+				['execute/', 'execute'],
+				['read/', 'read'],
+				['search/', 'search'],
+				['web/', 'web'],
+			];
+
+			for (const [prefix, alias] of aliasByPrefix) {
+				if (normalizedName.startsWith(prefix)) {
+					return alias;
+				}
+			}
+
+			if (normalizedName === 'todos') {
+				return 'todo';
+			}
+
+			return undefined;
+		}
+
+		function normalizeDisplayedToolName(toolName) {
+			if (typeof toolName !== 'string') {
+				return undefined;
+			}
+
+			const normalizedName = toolName.trim();
+
+			if (!normalizedName) {
+				return undefined;
+			}
+
+			return getCuratedToolAlias(normalizedName) || normalizedName;
+		}
+
+		function normalizeDisplayedToolList(value) {
+			return Array.isArray(value)
+				? unique(value.map(item => normalizeDisplayedToolName(item)).filter(Boolean))
+				: [];
+		}
+
+		function createSavedToolsList(selectedTools, existingTools, preserveMcpServerReferences = false) {
+			const preservedTools = preserveMcpServerReferences ? normalizeDisplayedToolList(existingTools).filter(isMcpServerToolReference) : [];
+
+			return unique([...normalizeDisplayedToolList(selectedTools), ...preservedTools]);
 		}
 		const fieldHelp = {
 			agentName: 'Custom agent name. If not specified, VS Code uses the file name.',
@@ -2981,10 +3140,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			instructionBody: 'Markdown instructions that define guidelines and rules for the affected AI tools.',
 			skillBody: 'Markdown instructions, workflow steps, examples, and links to resources in the skill directory.',
 		};
-		const toolPresets = [
-			{ label: 'Default Agent', tools: ['execute', 'read', 'edit', 'search', 'agent', 'web', 'todo'] },
-			{ label: 'Planning Agent', tools: ['read', 'search', 'web', 'todo'] },
-		];
+		const toolPresets = ${JSON.stringify(defaultToolPresets)};
 
 		applySettingsToInputs();
 		applyVisualizerColors();
@@ -5271,8 +5427,17 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function renderToolFlags(selectedTools, availableTools) {
-			const safeSelectedTools = Array.isArray(selectedTools) ? selectedTools : [];
-			const safeAvailableTools = Array.isArray(availableTools) ? availableTools : [];
+			const safeSelectedTools = normalizeDisplayedToolList(selectedTools);
+			const safeAvailableTools = Array.isArray(availableTools)
+				? normalizeDisplayedToolList(availableTools.map(tool => tool?.name)).map(name => {
+					const sourceTool = availableTools.find(tool => normalizeDisplayedToolName(tool?.name) === name);
+
+					return {
+						name,
+						description: sourceTool?.description || name,
+					};
+				})
+				: [];
 			const selected = new Set(safeSelectedTools);
 			const descriptions = new Map(safeAvailableTools.map(tool => [tool.name, tool.description || tool.name]));
 			const toolNames = unique([...safeAvailableTools.map(tool => tool.name), ...safeSelectedTools]).sort((left, right) => left.localeCompare(right));
@@ -5282,11 +5447,11 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return '<div class="field-label">' + renderFieldLabel('Tools', fieldHelp.tools) + '</div>' + presetButtons + '<p class="choice-empty">No available tools found.</p><div id="tool-check-list" class="choice-list"></div>' + renderCustomToolInput();
 			}
 
-			return '<details class="choice-details"><summary>' + renderFieldLabel('Tools', fieldHelp.tools) + renderSelectedToolPills([...selected]) + '</summary>' + presetButtons + '<div class="tool-filter"><input id="tool-filter" type="text" value="' + escapeAttribute(toolFilterValue) + '" placeholder="Filter tools"></div>' + renderSelectedToolPills([...selected]) + '<div id="tool-check-list" class="choice-list tool-choice-list">' + toolNames.map(toolName => renderToolCheckbox(toolName, selected.has(toolName), descriptions.get(toolName) || toolName)).join('') + '</div>' + renderCustomToolInput() + '</details>';
+			return presetButtons + '<details class="choice-details"><summary>' + renderFieldLabel('Tools', fieldHelp.tools) + renderSelectedToolPills([...selected]) + '</summary><div class="tool-filter"><input id="tool-filter" type="text" value="' + escapeAttribute(toolFilterValue) + '" placeholder="Filter tools"></div>' + renderSelectedToolPills([...selected]) + '<div id="tool-check-list" class="choice-list tool-choice-list">' + toolNames.map(toolName => renderToolCheckbox(toolName, selected.has(toolName), descriptions.get(toolName) || toolName)).join('') + '</div>' + renderCustomToolInput() + '</details>';
 		}
 
 		function renderToolPresetButtons() {
-			return '<div id="tool-preset-list" class="tool-preset-list" aria-label="Prebuilt tool selections">' + toolPresets.map((preset, index) => '<button class="tool-preset-button" type="button" data-tool-preset="' + index + '" title="' + escapeAttribute(preset.tools.join(', ')) + '">' + escapeHtml(preset.label) + '</button>').join('') + '</div>';
+			return '<div class="tool-preset-section"><div class="tool-preset-title">Tool presets</div><div id="tool-preset-list" class="tool-preset-list" aria-label="Prebuilt tool selections">' + toolPresets.map((preset, index) => '<button class="tool-preset-button" type="button" data-tool-preset="' + index + '" title="' + escapeAttribute(preset.tools.join(', ')) + '">' + escapeHtml(preset.label) + '</button>').join('') + '</div></div>';
 		}
 
 		function renderSelectedToolPills(toolNames) {
@@ -5379,10 +5544,10 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 
 			if (!Array.isArray(editedToolsByNodeId[node.id])) {
 				const tools = Array.isArray(node.tools) ? node.tools : [];
-				editedToolsByNodeId[node.id] = unique(tools.filter(tool => !isMcpServerToolReference(tool)));
+				editedToolsByNodeId[node.id] = normalizeDisplayedToolList(tools.filter(tool => !isMcpServerToolReference(tool)));
 			}
 
-			return editedToolsByNodeId[node.id];
+			return normalizeDisplayedToolList(editedToolsByNodeId[node.id]);
 		}
 
 		function setEditedTools(node, tools) {
@@ -5390,7 +5555,7 @@ class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
-			editedToolsByNodeId[node.id] = unique(tools.filter(Boolean));
+			editedToolsByNodeId[node.id] = normalizeDisplayedToolList(tools.filter(Boolean));
 		}
 
 		function getCheckedAgents() {
@@ -5811,7 +5976,7 @@ function readHookCommands(hooks: Record<string, unknown>): HookCommandSummary[] 
 	return commands.sort((left, right) => getHookEventOrder(left.event) - getHookEventOrder(right.event) || left.index - right.index);
 }
 
-function readHookCommandProperties(config: Record<string, unknown>): Record<string, string> {
+export function readHookCommandProperties(config: Record<string, unknown>): Record<string, string> {
 	const properties: Record<string, string> = {};
 
 	for (const property of ['command', 'windows', 'linux', 'osx', 'cwd'] as const) {
@@ -5822,14 +5987,10 @@ function readHookCommandProperties(config: Record<string, unknown>): Record<stri
 		}
 	}
 
-	if (typeof config.timeout === 'number') {
-		properties.timeout = String(config.timeout);
-	} else {
-		const timeout = readString(config.timeout);
+	const timeout = readHookTimeoutText(config);
 
-		if (timeout) {
-			properties.timeout = timeout;
-		}
+	if (timeout) {
+		properties.timeout = timeout;
 	}
 
 	if (config.env && typeof config.env === 'object' && !Array.isArray(config.env)) {
@@ -5843,6 +6004,24 @@ function readHookCommandProperties(config: Record<string, unknown>): Record<stri
 	}
 
 	return properties;
+}
+
+function readHookTimeoutText(config: Record<string, unknown>): string | undefined {
+	if (typeof config.timeout === 'number') {
+		return String(config.timeout);
+	}
+
+	const timeout = readString(config.timeout);
+
+	if (timeout) {
+		return timeout;
+	}
+
+	if (typeof config.timeoutSec === 'number') {
+		return String(config.timeoutSec);
+	}
+
+	return readString(config.timeoutSec);
 }
 
 function readHookEventArray(hooks: Record<string, unknown>, eventName: HookEventName): unknown[] {
@@ -5896,7 +6075,7 @@ function readPostedHookCommands(value: unknown): Array<{ id: string; event: Hook
 	}
 }
 
-function normalizePostedHookCommandProperties(properties: Record<string, unknown>): Record<string, unknown> {
+export function normalizePostedHookCommandProperties(properties: Record<string, unknown>): Record<string, unknown> {
 	const normalized: Record<string, unknown> = {};
 
 	for (const property of editableHookCommandProperties) {
@@ -5915,6 +6094,17 @@ function normalizePostedHookCommandProperties(properties: Record<string, unknown
 			normalized.env = parseHookEnvValue(text);
 		} else {
 			normalized[property] = text;
+		}
+	}
+
+	if (!Object.prototype.hasOwnProperty.call(normalized, 'timeout') && Object.prototype.hasOwnProperty.call(properties, 'timeoutSec')) {
+		const legacyTimeout = properties.timeoutSec;
+		const text = typeof legacyTimeout === 'number' ? String(legacyTimeout) : typeof legacyTimeout === 'string' ? legacyTimeout : '';
+
+		if (text.trim()) {
+			const timeout = Number(text);
+
+			normalized.timeout = Number.isFinite(timeout) ? timeout : text;
 		}
 	}
 
@@ -6214,6 +6404,39 @@ function areSameResourceUri(left: vscode.Uri, right: vscode.Uri): boolean {
 
 function unique(values: string[]): string[] {
 	return [...new Set(values)];
+}
+
+function getCuratedToolAlias(toolName: string): string | undefined {
+	const normalizedName = toolName.trim();
+
+	if (!normalizedName) {
+		return undefined;
+	}
+
+	if (curatedDefaultAvailableTools.some(tool => tool.name === normalizedName)) {
+		return normalizedName;
+	}
+
+	const aliasByPrefix: Array<[string, string]> = [
+		['agent/', 'agent'],
+		['edit/', 'edit'],
+		['execute/', 'execute'],
+		['read/', 'read'],
+		['search/', 'search'],
+		['web/', 'web'],
+	];
+
+	for (const [prefix, alias] of aliasByPrefix) {
+		if (normalizedName.startsWith(prefix)) {
+			return alias;
+		}
+	}
+
+	if (normalizedName === 'todos') {
+		return 'todo';
+	}
+
+	return undefined;
 }
 
 function getNonce(): string {

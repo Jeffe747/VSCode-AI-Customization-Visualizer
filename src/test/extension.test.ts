@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import matter = require('gray-matter');
 import * as vscode from 'vscode';
-import { createCustomizationMarkdown, createHookCustomizationJson, createSavedToolsList, getCustomizationFileName, getCustomizationFolderUri, isToolChoiceVisibleForFilter, normalizePostedHandoffs, parseHandoffsInput, parseLines, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
+import { createCustomizationMarkdown, createHookCustomizationJson, createSavedToolsList, getCustomizationFileName, getCustomizationFolderUri, getDefaultAvailableTools, getDefaultToolPresets, isToolChoiceVisibleForFilter, normalizePostedHandoffs, normalizePostedHookCommandProperties, parseHandoffsInput, parseLines, readHookCommandProperties, stringifyCustomizationMarkdown, toolChoiceHiddenCssRule, validateRequiredHandoffFields } from '../extension';
 import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 
 suite('Extension Test Suite', () => {
@@ -410,6 +410,44 @@ suite('Extension Test Suite', () => {
 	test('saves selected tools from the edit section', () => {
 		assert.deepStrictEqual(createSavedToolsList([' search ', 'read', 'read', ''], ['playwright/*', 'codebase'], true), ['search', 'read', 'playwright/*']);
 		assert.deepStrictEqual(createSavedToolsList(['search'], ['playwright/*'], false), ['search']);
+		assert.deepStrictEqual(createSavedToolsList(['execute/getTerminalOutput', 'execute/runInTerminal', 'web/fetch', 'custom-tool'], [], false), ['execute', 'web', 'custom-tool']);
+	});
+
+	test('seeds curated tool aliases while preserving custom tools', () => {
+		const tools = getDefaultAvailableTools([
+			{ name: 'read/readFile', description: 'Read a file.' },
+			{ name: 'edit/editFiles', description: 'Edit files.' },
+			{ name: 'search/codebase', description: 'Search the workspace.' },
+			{ name: 'agent/runSubagent', description: 'Run a subagent.' },
+			{ name: 'web/fetch', description: 'Fetch web content.' },
+			{ name: 'todos', description: 'Track progress.' },
+		], [
+			{ name: 'custom-tool', description: 'Project specific tool.' },
+			{ name: 'codebase', description: 'Legacy custom tool string.' },
+		]);
+
+		assert.ok(tools.some(tool => tool.name === 'agent'));
+		assert.ok(tools.some(tool => tool.name === 'execute'));
+		assert.ok(tools.some(tool => tool.name === 'read'));
+		assert.ok(tools.some(tool => tool.name === 'edit'));
+		assert.ok(tools.some(tool => tool.name === 'search' && tool.description === 'Search code, symbols, and workspace content.'));
+		assert.ok(tools.some(tool => tool.name === 'web'));
+		assert.ok(tools.some(tool => tool.name === 'todo'));
+		assert.ok(tools.some(tool => tool.name === 'custom-tool'));
+		assert.ok(tools.some(tool => tool.name === 'codebase'));
+		assert.strictEqual(tools.some(tool => tool.name === 'read/readFile'), false);
+		assert.strictEqual(tools.some(tool => tool.name === 'search/codebase'), false);
+		assert.strictEqual(tools.some(tool => tool.name === 'web/fetch'), false);
+		assert.strictEqual(tools.some(tool => tool.name === 'todos'), false);
+	});
+
+	test('exposes the expected built-in tool presets', () => {
+		assert.deepStrictEqual(getDefaultToolPresets(), [
+			{ label: 'General', tools: ['execute', 'read', 'edit', 'search', 'agent', 'web', 'todo'] },
+			{ label: 'Planning', tools: ['read', 'search', 'web', 'todo'] },
+			{ label: 'Implementation', tools: ['execute', 'read', 'edit', 'search', 'web', 'todo'] },
+			{ label: 'Test', tools: ['execute', 'read', 'edit', 'search', 'todo'] },
+		]);
 	});
 
 	test('parses comma newline and array line inputs into unique trimmed values', () => {
@@ -461,6 +499,16 @@ suite('Extension Test Suite', () => {
 		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', prompt: 'Proceed', send: false }]), { ok: false, index: 0, field: 'agent' });
 		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', agent: 'agent', send: false }]), { ok: false, index: 0, field: 'prompt' });
 		assert.deepStrictEqual(validateRequiredHandoffFields([{ label: 'Proceed', agent: 'agent', prompt: 'Proceed' }]), { ok: false, index: 0, field: 'send' });
+	});
+
+	test('reads legacy hook timeoutSec values into the editable timeout field', () => {
+		assert.deepStrictEqual(readHookCommandProperties({ timeoutSec: 45 }), { timeout: '45' });
+		assert.deepStrictEqual(readHookCommandProperties({ timeoutSec: '90' }), { timeout: '90' });
+	});
+
+	test('saves legacy posted hook timeoutSec values as timeout', () => {
+		assert.deepStrictEqual(normalizePostedHookCommandProperties({ timeoutSec: '45' }), { timeout: 45 });
+		assert.deepStrictEqual(normalizePostedHookCommandProperties({ timeoutSec: 'forever' }), { timeout: 'forever' });
 	});
 });
 
