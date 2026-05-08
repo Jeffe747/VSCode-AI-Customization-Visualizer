@@ -5,11 +5,45 @@ import { agentBodyPlaceholder, agentDescriptionPlaceholder, cleanAgentPlaceholde
 import { normalizePostedHandoffs, parseHandoffsInput, validateRequiredHandoffFields } from '../customizations/handoffs';
 import { getHookConfigName, normalizePostedHookCommandProperties, readHookCommandProperties, readHookCommands, readHookEvents, readPostedHookCommands } from '../customizations/hooks';
 import { extractToolReferences, getFileKind, getFileName, isHookFilePath, isInstructionFilePath, isSkillFilePath, normalizeFrontmatter, uniqueUris } from '../customizations/paths';
-import { WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
+import { GraphJson, WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 import { createSavedToolsList, getDefaultAvailableTools, getDefaultToolPresets, isToolChoiceVisibleForFilter, toolChoiceHiddenCssRule } from '../tools/catalog';
 import { parseLines } from '../utils/values';
 
 suite('Extension Test Suite', () => {
+	test('posts refresh graph payloads in a VS Code webview host', async function () {
+		this.timeout(15000);
+
+		await activateExtensionForTests();
+		await vscode.commands.executeCommand('aivisualizer.popout');
+
+		try {
+			await vscode.commands.executeCommand('aivisualizer.test.resetPostedMessages');
+			await vscode.commands.executeCommand('aivisualizer.refresh');
+
+			await waitForRecordedMessage(message => message.type === 'graph:loading');
+			const updateMessage = await waitForRecordedMessage(message => message.type === 'graph:update' && Boolean(message.graph));
+			const graph = updateMessage.graph;
+
+			assert.ok(graph);
+			assert.ok(graph.nodes.some(node => node.id === 'agent:fixtureplanning'));
+			assert.ok(graph.nodes.some(node => node.id === 'agent:fixtureimplementation'));
+			assert.ok(graph.nodes.some(node => node.id === 'prompt:src/test/fixtures/basic-ai-workspace/.github/prompts/fixture-review.prompt.md'));
+			assert.ok(graph.nodes.some(node => node.type === 'instruction' && node.label === 'Fixture Instructions'));
+			assert.ok(graph.nodes.some(node => node.type === 'handoff' && node.label === 'Implement fixture'));
+			assert.ok(graph.links.some(link => link.source === 'agent:fixtureplanning' && link.target === 'agent:fixtureimplementation' && link.type === 'uses-agent'));
+			assert.ok(graph.links.some(link => link.type === 'uses-handoff'));
+			assert.ok(graph.links.some(link => link.type === 'handoff-to-agent'));
+			assert.ok(Array.isArray(graph.availableTools));
+			assert.ok(Array.isArray(graph.availableModels));
+
+			const messages = await getRecordedMessages();
+
+			assert.strictEqual(messages.some(message => message.type === 'graph:error'), false);
+		} finally {
+			await vscode.commands.executeCommand('aivisualizer.popout');
+		}
+	});
+
 	test('maps agent references into hierarchy links', () => {
 		const files: WorkspaceAiFile[] = [
 			createAgent('ProjectOrchestrator', ['ImplementationEngineer', 'TestEngineer']),
@@ -614,6 +648,51 @@ suite('Extension Test Suite', () => {
 		assert.deepStrictEqual(normalizePostedHookCommandProperties({ timeoutSec: 'forever' }), { timeout: 'forever' });
 	});
 });
+
+interface RecordedWebviewMessage {
+	type?: string;
+	graph?: GraphJson;
+	message?: string;
+	active?: boolean;
+}
+
+async function activateExtensionForTests(): Promise<void> {
+	const extension = vscode.extensions.getExtension('jeffe747.aivisualizer') ?? vscode.extensions.all.find(extension => extension.packageJSON?.name === 'aivisualizer');
+
+	assert.ok(extension, 'Expected the AI visualizer extension to be available in the VS Code test host.');
+	await extension.activate();
+}
+
+async function waitForRecordedMessage(predicate: (message: RecordedWebviewMessage) => boolean, timeoutMs = 10000): Promise<RecordedWebviewMessage> {
+	const startedAt = Date.now();
+
+	while (Date.now() - startedAt < timeoutMs) {
+		const messages = await getRecordedMessages();
+		const match = messages.find(predicate);
+
+		if (match) {
+			return match;
+		}
+
+		await delay(50);
+	}
+
+	assert.fail('Timed out waiting for recorded webview message.');
+}
+
+async function getRecordedMessages(): Promise<RecordedWebviewMessage[]> {
+	const messages = await vscode.commands.executeCommand<unknown>('aivisualizer.test.getPostedMessages');
+
+	return Array.isArray(messages) ? messages.filter(isRecordedWebviewMessage) : [];
+}
+
+function isRecordedWebviewMessage(value: unknown): value is RecordedWebviewMessage {
+	return Boolean(value) && typeof value === 'object' && typeof (value as RecordedWebviewMessage).type === 'string';
+}
+
+async function delay(ms: number): Promise<void> {
+	await new Promise<void>(resolve => setTimeout(resolve, ms));
+}
 
 function createAgent(name: string, agents: string[] = [], tools: string[] = [], body = '', model?: string, userInvocable?: boolean, argumentHint?: string, disableModelInvocation?: boolean, handoffs?: unknown[], description?: string): WorkspaceAiFile {
 	return {

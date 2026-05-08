@@ -1,4 +1,93 @@
+# Usage
+Tasks should be listed as small and precie tasks. Use already defined tasks as a template.
+
 # Done
+
+## Handoff Plan: Refactor Webview Renderer and Add E2E UI Coverage
+
+### Phase 1: Add a Separate Webview Build
+- Added Svelte/Vite dev dependencies and a separate webview build pipeline.
+- Kept `esbuild.js` responsible for `dist/extension.js`.
+- Added Vite output for webview assets in `dist/webview/`.
+- Updated compile, watch, package, and prepublish scripts so extension and webview assets are built together.
+- Confirmed CSP-compatible bundled webview output with no remote assets.
+
+### Phase 2: Reduce `htmlRenderer.ts` to a Shell
+- Switched normal extension use from the legacy HTML string renderer to the bundled Svelte webview shell.
+- Kept the provider-facing `renderVisualizerHtml(webview, isWindowModeView, settings)` entry point stable.
+- Reduced `src/webview/htmlRenderer.ts` to the HTML shell, CSP, root element, bootstrapped settings, color variables, and bundled JS/CSS asset links.
+- Removed legacy static markup, dialogs, graph UI, editor UI, event handling, and SVG rendering from the renderer string.
+
+### Phase 3: Define a Typed Webview Protocol
+- Added shared extension-to-webview message types for graph loading, update, error, save error, and window-mode update.
+- Added shared webview-to-extension message types for ready, refresh, popout, open actions, save, create, and settings updates.
+- Reused the shared protocol from the provider and Svelte webview app where practical.
+
+### Phase 4: Completed Webview UI Migration Slices
+- Added the first Svelte webview UI migration slice with toolbar, about/settings/new dialogs, documentation links, graph shell, toast components, and shared app styling.
+- Added Svelte-side message runtime and VS Code API helpers for ready, refresh, popout, documentation links, loading, graph update, graph error, save error, and window-mode state handling.
+- Ported graph overlay state with a layout selector, token heatmap toggle, orphan highlight toggle, and `vscode.setState` persistence.
+- Ported first-pass graph layout helpers and SVG rendering for hierarchical, radial, and force-style grid layouts using `GraphJson` payloads.
+- Ported first-pass graph node interaction with click/keyboard selection, selected-node styling, and a placeholder editor panel with node details plus Open file/MCP actions.
+- Ported first-pass graph navigation with background drag panning, Ctrl+wheel zoom, panning cursors, and larger invisible SVG node hit targets.
+- Ported editable Svelte instruction, prompt, and first-pass agent editor forms with `node:save` payload generation.
+- Ported the first-pass editable Svelte skill editor form with `node:save` payload generation.
+- Ported the first-pass direct Svelte handoff editor form with `node:save` payload generation.
+- Ported the first-pass editable Svelte hook editor form with hook command payload generation.
+- Ported Svelte new customization dialog behavior with create payload posting, MCP open behavior, validation feedback, and focus handling.
+- Ported Svelte settings dialog behavior with auto-persisted layout, documentation, graph toggle, sizing, heatmap, baseline model, debug, and color settings.
+- Ported Svelte save polish with direct handoff validation and scroll preservation across save-triggered graph refreshes.
+- Ported final Svelte graph parity details: token heatmap glow, orphan styling, marker glyphs, reciprocal edge curves, model/context/audience labels, hook command labels, node-scale-aware layout spacing, responsive graph viewport sizing, and bounds-centered rendering.
+- Added a reusable model selector and shared agent/tool checkbox controls for editor migration reuse.
+
+### Phase 5: Add Test-Only Message Recording
+- Added test-only webview message recording in `AgentVisualizerViewProvider` around the existing `postMessage` path.
+- Enabled recording only in `vscode.ExtensionMode.Test`.
+- Added unadvertised test commands for resetting and reading posted webview messages.
+- Recorded extension-to-webview messages after posting so integration tests can assert provider payloads without DOM scraping.
+
+### Phase 6: Add Fixture Workspace
+- Added a minimal fixture customization workspace for integration tests.
+- Included predictable agent, prompt, instruction, handoff, and link payload coverage.
+
+### Phase 7: Implement `@vscode/test-electron` Integration Tests
+- Added integration coverage that activates the extension in a real VS Code test host.
+- Added coverage that opens the visualizer, executes `aivisualizer.refresh`, and verifies `graph:loading` and `graph:update` payloads.
+- Asserted fixture graph payload shape and absence of `graph:error` for the fixture workspace.
+
+### Playwright Decision
+- Deferred Playwright for this refactor.
+- Kept `@vscode/test-electron` as the primary tool for extension activation, command execution, and provider message payload verification.
+- Left Playwright as a later option for webview DOM behavior, screenshots, visual regression, or deep user interaction tests.
+
+## Completed Work Log
+- Fixed the collapsed Svelte Tools summary empty pill so `No active tools` no longer inherits the global page-empty layout and renders as a tall capsule.
+- Fixed the expanded Svelte Tools editor empty state so `No active tools` no longer renders as an oversized capsule when no tools are selected.
+- Matched the Svelte agent/prompt editor presentation to the legacy editor screenshots: header Save button, user-invocable-first ordering, two-column name/model rows, collapsible Agents and Tools sections, collapsed Tools summary pills, non-wrapping tool pills, and corrected checkbox alignment.
+- Restored Svelte editor parity for tool editing: preset buttons, filterable tool choices, active tool pills, custom tool input, prompt tool editing, aligned checkbox rows, and `?` help markers on editable fields.
+- Restored the pre-refactor graph presentation algorithms in the Svelte layout engine for Hierarchical, Radial, and Force-directed modes, including legacy hierarchy ordering, radial center/radius placement, and the force simulation instead of the simplified grid fallback.
+- Switched production rendering to the bundled Svelte shell and reduced `src/webview/htmlRenderer.ts` from the legacy monolithic renderer to the small CSP/bootstrap/asset shell.
+- Ported final Svelte graph parity details including heatmap/orphan styling, marker glyphs, reciprocal edge curves, model/context/audience labels, hook command labels, node-scale-aware layout spacing, responsive graph viewport sizing, and graph-bounds centering.
+- Ported Svelte save polish with direct handoff label/agent/prompt validation, focused validation feedback, and window/document scroll restoration after save refreshes.
+- Ported Svelte settings dialog persistence and immediate UI application for documentation visibility, graph toggles, side-by-side layout, editor text scale, heatmap thresholds, baseline model, debug flag, and visualizer colors.
+- Ported Svelte new customization dialog behavior for instruction, skill, prompt, agent, hook, and MCP creation paths with required-name validation and focus handling.
+- Ported the first-pass Svelte hook editor form with editable name, configured hook event rows, add hook event support, command property toggles, and `hookCommands` payload generation.
+- Ported the first-pass direct Svelte handoff editor form with editable label, target agent, prompt, send flag, model selector, and `node:save` payload generation back into the owning agent file.
+- Ported the first-pass Svelte skill editor form with editable name, description, argument hint, context, invocation flags, body, and `node:save` payload generation.
+- Ported the first-pass Svelte agent editor form with editable core fields, reusable model selector, shared agent/tool checkbox controls, and `node:save` payload generation that preserves existing handoffs.
+- Ported the Svelte prompt editor form with editable name, agent, model, and body fields, preserving existing tools in `node:save` payloads and adding a reusable model selector component.
+- Ported the first Svelte editable editor form for instruction nodes, including name, description, apply-to, body fields, and `node:save` payload generation through a shared save helper.
+- Ported first-pass Svelte graph navigation with background drag panning, Ctrl+wheel zoom, panning cursors, and larger invisible SVG node hit targets.
+- Ported first-pass Svelte graph node interaction with click/keyboard selection, selected-node styling, and a placeholder editor panel with node details plus Open file/MCP actions.
+- Ported first-pass graph layout helpers and SVG rendering into the Svelte webview app for hierarchical, radial, and force-style grid layouts using `GraphJson` payloads.
+- Ported graph overlay state into the Svelte webview app with a layout selector, token heatmap toggle, orphan highlight toggle, and `vscode.setState` persistence.
+- Added a CSP-safe bundled Svelte webview shell renderer path and gated it to VS Code test mode while preserving the legacy renderer for normal extension use.
+- Added Svelte-side webview message runtime and VS Code API helpers for `webview:ready`, refresh, popout, documentation links, loading, graph update, graph error, save error, and window-mode state handling.
+- Added the first Svelte webview UI migration slice with toolbar, about/settings/new dialogs, documentation links, graph shell, toast components, and shared app styling.
+- Added a separate Svelte/Vite webview build scaffold that outputs `dist/webview/index.js` and `dist/webview/index.css` while keeping the extension bundle on esbuild.
+- Added typed webview protocol definitions for extension-to-webview and webview-to-extension messages.
+- Added test-only webview message recording commands for `@vscode/test-electron` integration assertions.
+- Added a fixture customization workspace and a VS Code Electron integration test that opens the visualizer popout, executes `aivisualizer.refresh`, and verifies `graph:loading` and `graph:update` payloads.
 - Refactored the bloated extension entrypoint into focused modules for activation wiring, webview orchestration, HTML rendering, settings, scanning, diagnostics, persistence, customization helpers, tools, hooks, handoffs, paths, and VS Code resource utilities, leaving extension.ts as a thin lifecycle shim.
 - Canonicalized tool lists across file reads, editor state, and saves so raw built-in tool IDs like execute/getTerminalOutput and execute/runInTerminal no longer appear in the Tools UI.
 - Made the default displayed tool choices use the curated VS Code custom-agent aliases, added General/Planning/Implementation/Test role presets, and kept arbitrary custom tool strings supported. [execute,read,edit,search,agent,web,todo].

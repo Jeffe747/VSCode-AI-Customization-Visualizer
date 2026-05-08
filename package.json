@@ -2,7 +2,7 @@
   "name": "aivisualizer",
   "displayName": "Copilot AI Customization Visualizer",
   "description": "Visualize and edit Copilot AI customization files.",
-  "version": "0.0.23",
+  "version": "0.0.24",
   "author": {
     "name": "Jeppe Andreas Jakobsen",
     "url": "https://github.com/Jeffe747"
@@ -83,11 +83,13 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
-    "watch": "npm-run-all -p watch:*",
+    "compile": "npm run check-types && npm run lint && npm run build:webview && node esbuild.js",
+    "watch": "npm-run-all -p watch:tsc watch:esbuild watch:webview",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "watch:webview": "vite build --config vite.webview.config.mjs --watch",
+    "build:webview": "vite build --config vite.webview.config.mjs",
+    "package": "npm run check-types && npm run lint && npm run build:webview -- --mode production && node esbuild.js --production",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
@@ -96,6 +98,8 @@
     "test": "vscode-test"
   },
   "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.1",
+    "@tsconfig/svelte": "^5.0.8",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.116.0",
@@ -105,8 +109,10 @@
     "esbuild": "^0.27.3",
     "eslint": "^9.39.3",
     "npm-run-all": "^4.1.5",
+    "svelte": "^5.55.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.1"
+    "typescript-eslint": "^8.56.1",
+    "vite": "^8.0.11"
   },
   "overrides": {
     "diff": "^9.0.0",

@@ -20,6 +20,13 @@ export function registerVisualizer(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('aivisualizer.popout', () => void provider.toggleWindowMode()),
 		...fileWatchers,
 	);
+
+	if (context.extensionMode === vscode.ExtensionMode.Test) {
+		context.subscriptions.push(
+			vscode.commands.registerCommand('aivisualizer.test.resetPostedMessages', () => provider.resetPostedMessagesForTests()),
+			vscode.commands.registerCommand('aivisualizer.test.getPostedMessages', () => provider.getPostedMessagesForTests()),
+		);
+	}
 }
 
 function createGraphFileWatchers(provider: AgentVisualizerViewProvider): vscode.Disposable[] {

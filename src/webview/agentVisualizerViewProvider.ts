@@ -7,6 +7,7 @@ import { getDefaultAvailableTools } from '../tools/catalog';
 import { findOpenTextTabViewColumn, isWorkspaceResourceUri } from '../utils/vscodeResources';
 import { readString } from '../utils/values';
 import * as htmlRenderer from './htmlRenderer';
+import { ExtensionToWebviewMessage } from './protocol';
 import { VisualizerSettings, VisualizerSettingsMode, hasVisualizerColors, normalizeVisualizerSettings, sharedVisualizerSettingsStorageKey, visualizerSettingsStorageKeys } from './settings';
 
 
@@ -16,6 +17,7 @@ export class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	private cachedGraph?: GraphJson;
 	private cachedBaseModels?: { expiresAt: number; models: AvailableModel[] };
 	private refreshTimer?: NodeJS.Timeout;
+	private readonly postedMessagesForTests: unknown[] = [];
 	private readonly persistence: CustomizationPersistence;
 
 	constructor(
@@ -220,13 +222,13 @@ export class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 			return;
 		}
 
-		const message = {
+		const message: ExtensionToWebviewMessage = {
 			type: 'graph:update',
 			graph: this.cachedGraph,
 		};
 
 		if (targetWebview) {
-			await targetWebview.postMessage(message);
+			await this.postMessageToWebview(targetWebview, message);
 			return;
 		}
 
@@ -234,24 +236,49 @@ export class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async postWindowModeState(targetWebview?: vscode.Webview): Promise<void> {
-		const message = {
+		const message: ExtensionToWebviewMessage = {
 			type: 'window-mode:update',
 			active: Boolean(this.popoutPanel),
 		};
 
 		if (targetWebview) {
-			await targetWebview.postMessage(message);
+			await this.postMessageToWebview(targetWebview, message);
 			return;
 		}
 
 		await this.postMessageToWebviews(message);
 	}
 
-	private async postMessageToWebviews(message: unknown): Promise<void> {
+	private async postMessageToWebviews(message: ExtensionToWebviewMessage): Promise<void> {
 		await Promise.all([
-			this.webviewView?.webview.postMessage(message),
-			this.popoutPanel?.webview.postMessage(message),
-		].filter((promise): promise is Thenable<boolean> => Boolean(promise)));
+			this.postMessageToWebview(this.webviewView?.webview, message),
+			this.postMessageToWebview(this.popoutPanel?.webview, message),
+		]);
+	}
+
+	private async postMessageToWebview(webview: vscode.Webview | undefined, message: ExtensionToWebviewMessage): Promise<void> {
+		if (!webview) {
+			return;
+		}
+
+		await webview.postMessage(message);
+		this.recordPostedMessageForTests(message);
+	}
+
+	getPostedMessagesForTests(): unknown[] {
+		return [...this.postedMessagesForTests];
+	}
+
+	resetPostedMessagesForTests(): void {
+		this.postedMessagesForTests.splice(0);
+	}
+
+	private recordPostedMessageForTests(message: ExtensionToWebviewMessage): void {
+		if (this.context.extensionMode !== vscode.ExtensionMode.Test) {
+			return;
+		}
+
+		this.postedMessagesForTests.push(clonePostedMessage(message));
 	}
 
 	private getAvailableTools(graph: GraphJson): AvailableTool[] {
@@ -384,7 +411,9 @@ export class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private getHtml(webview: vscode.Webview, isWindowModeView: boolean): string {
-		return htmlRenderer.renderVisualizerHtml(webview, isWindowModeView, this.getVisualizerSettings(isWindowModeView ? 'window' : 'activity'));
+		const settings = this.getVisualizerSettings(isWindowModeView ? 'window' : 'activity');
+
+		return htmlRenderer.renderVisualizerHtml(webview, isWindowModeView, settings);
 	}
 }
 
@@ -392,5 +421,13 @@ function formatOperationError(prefix: string, error: unknown): string {
 	const details = error instanceof Error ? error.message : String(error);
 
 	return details ? `${prefix}: ${details}` : prefix;
+}
+
+function clonePostedMessage(message: unknown): unknown {
+	try {
+		return JSON.parse(JSON.stringify(message)) as unknown;
+	} catch {
+		return message;
+	}
 }
 
