@@ -78,6 +78,8 @@ Tasks should be listed as small and precie tasks. Use already defined tasks as a
 - Left Playwright as a later option for webview DOM behavior, screenshots, visual regression, or deep user interaction tests.
 
 ## Completed Work Log
+- Fixed settings dialog control alignment from screenshot feedback so checkboxes stay beside labels, sliders keep values on-row, and the Text shadow toggle no longer stretches across the color section.
+- Made an expert UI pass on the in-place Settings dialog with a cleaner header action, tighter section grouping, aligned toggle/slider/threshold controls, and a more scannable color picker grid.
 - Removed the About button from the Svelte toolbar.
 - Restored Material-style SVG icons for New, Settings, and Refresh toolbar actions.
 - Enlarged the settings dialog and widened its color picker grid so the settings content fits more comfortably.

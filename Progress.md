@@ -7,7 +7,9 @@
 
 Current active handoff plan: none.
 
-Most recent completed task: Removed the toolbar About button, restored New/Settings/Refresh icons, and enlarged the settings dialog.
+Current active task: none.
+
+Most recent completed task: Fixed settings dialog control alignment from screenshot feedback.
 
 Most recent completed plan: `Done.md` -> "Handoff Plan: Refactor Webview Renderer and Add E2E UI Coverage".
 
