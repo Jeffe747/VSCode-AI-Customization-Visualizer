@@ -14,6 +14,7 @@
 	export let tokenHeatmapEnabled = false;
 	export let orphanHighlightEnabled = false;
 	export let nodeScale = 1.1;
+	export let textShadowEnabled = true;
 	export let heatmapMediumThreshold = 0.38;
 	export let heatmapHighThreshold = 0.72;
 	export let heatmapBaselineModel: string | undefined = undefined;
@@ -184,7 +185,7 @@
 
 <section class="visualizer" aria-label="Graph visualizer">
 	<div class="visualizer-body">
-		<div class="graph" bind:this={graphElement}>
+		<div class="graph" class:text-shadow-disabled={!textShadowEnabled} bind:this={graphElement}>
 			<div class="graph-overlay">
 				<div class="legend">
 					<span><i class="swatch instruction"></i>Instructions</span>

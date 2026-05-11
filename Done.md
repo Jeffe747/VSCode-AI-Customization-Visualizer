@@ -78,6 +78,10 @@ Tasks should be listed as small and precie tasks. Use already defined tasks as a
 - Left Playwright as a later option for webview DOM behavior, screenshots, visual regression, or deep user interaction tests.
 
 ## Completed Work Log
+- Removed the About button from the Svelte toolbar.
+- Restored Material-style SVG icons for New, Settings, and Refresh toolbar actions.
+- Enlarged the settings dialog and widened its color picker grid so the settings content fits more comfortably.
+- Added a visualizer Text shadow checkbox alongside the color pickers, persisted it with shared visualizer settings, and made it toggle the SVG label halo in the graph.
 - Fixed the collapsed Svelte Tools summary empty pill so `No active tools` no longer inherits the global page-empty layout and renders as a tall capsule.
 - Fixed the expanded Svelte Tools editor empty state so `No active tools` no longer renders as an oversized capsule when no tools are selected.
 - Matched the Svelte agent/prompt editor presentation to the legacy editor screenshots: header Save button, user-invocable-first ordering, two-column name/model rows, collapsible Agents and Tools sections, collapsed Tools summary pills, non-wrapping tool pills, and corrected checkbox alignment.

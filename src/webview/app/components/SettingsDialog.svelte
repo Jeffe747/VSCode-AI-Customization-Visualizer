@@ -69,6 +69,7 @@
 			</section>
 			<section class="settings-section" aria-label="Visualizer colors">
 				<h4>Colors</h4>
+				<label class="settings-toggle"><input type="checkbox" checked={settings.textShadowEnabled} onchange={event => updateSettings({ textShadowEnabled: event.currentTarget.checked })}><span>Text shadow</span></label>
 				<div class="color-grid">
 					{#each colorDefinitions as colorDefinition}
 						<label class="color-control" title={colorDefinition.description}>

@@ -8,6 +8,7 @@ import { extractToolReferences, getFileKind, getFileName, isHookFilePath, isInst
 import { GraphJson, WorkspaceAiFile, mapWorkspaceFilesToGraph } from '../mapper';
 import { createSavedToolsList, getDefaultAvailableTools, getDefaultToolPresets, isToolChoiceVisibleForFilter, toolChoiceHiddenCssRule } from '../tools/catalog';
 import { parseLines } from '../utils/values';
+import { normalizeVisualizerSettings } from '../webview/settings';
 
 suite('Extension Test Suite', () => {
 	test('posts refresh graph payloads in a VS Code webview host', async function () {
@@ -42,6 +43,12 @@ suite('Extension Test Suite', () => {
 		} finally {
 			await vscode.commands.executeCommand('aivisualizer.popout');
 		}
+	});
+
+	test('normalizes visualizer text shadow setting', () => {
+		assert.strictEqual(normalizeVisualizerSettings({}).textShadowEnabled, true);
+		assert.strictEqual(normalizeVisualizerSettings({ textShadowEnabled: false }).textShadowEnabled, false);
+		assert.strictEqual(normalizeVisualizerSettings({ textShadowEnabled: true }).textShadowEnabled, true);
 	});
 
 	test('maps agent references into hierarchy links', () => {

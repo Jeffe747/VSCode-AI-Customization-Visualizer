@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import AboutDialog from './components/AboutDialog.svelte';
 	import DocumentationLinks from './components/DocumentationLinks.svelte';
 	import EditorPanel from './components/EditorPanel.svelte';
 	import type { ToolPreset } from './components/ToolsEditor.svelte';
@@ -19,7 +18,6 @@
 
 	export let initialData: WebviewBootstrapData;
 
-	let aboutOpen = false;
 	let settingsOpen = false;
 	let newOpen = false;
 	let errorMessage = '';
@@ -179,17 +177,16 @@
 </script>
 
 <main class="app-shell" class:side-by-side={currentSettings.sideBySideLayout} style={'--editor-text-size: ' + currentSettings.textScale + 'em'} data-settings-mode={initialData.settingsMode}>
-	<Toolbar windowModeActive={windowModeActive} onNew={() => newOpen = true} onPopout={() => postWebviewMessage({ type: 'popout' })} onAbout={() => aboutOpen = true} onSettings={() => settingsOpen = true} onRefresh={() => postWebviewMessage({ type: 'refresh' })} />
+	<Toolbar windowModeActive={windowModeActive} onNew={() => newOpen = true} onPopout={() => postWebviewMessage({ type: 'popout' })} onSettings={() => settingsOpen = true} onRefresh={() => postWebviewMessage({ type: 'refresh' })} />
 	<DocumentationLinks hidden={currentSettings.documentationLinksHidden} onOpenDocs={url => postWebviewMessage({ type: 'docs:open', url })} />
 	<div class="workspace-panels">
-		<GraphShell graph={activeGraph} {selectedNodeId} status={graphStatus} {loading} tokenHeatmapVisible={currentSettings.heatmapToggleVisible} orphanToggleVisible={currentSettings.orphanToggleVisible} layoutAlgorithm={graphViewState.graphLayoutAlgorithm} tokenHeatmapEnabled={graphViewState.tokenHeatmapEnabled} orphanHighlightEnabled={graphViewState.orphanHighlightEnabled} nodeScale={currentSettings.nodeScale} heatmapMediumThreshold={currentSettings.heatmapMediumThreshold} heatmapHighThreshold={currentSettings.heatmapHighThreshold} heatmapBaselineModel={currentSettings.heatmapBaselineModel} onLayoutChange={(graphLayoutAlgorithm: GraphLayoutAlgorithm) => updateGraphViewState({ graphLayoutAlgorithm })} onTokenHeatmapChange={tokenHeatmapEnabled => updateGraphViewState({ tokenHeatmapEnabled })} onOrphanHighlightChange={orphanHighlightEnabled => updateGraphViewState({ orphanHighlightEnabled })} onSelectNode={selectNode} />
+		<GraphShell graph={activeGraph} {selectedNodeId} status={graphStatus} {loading} tokenHeatmapVisible={currentSettings.heatmapToggleVisible} orphanToggleVisible={currentSettings.orphanToggleVisible} layoutAlgorithm={graphViewState.graphLayoutAlgorithm} tokenHeatmapEnabled={graphViewState.tokenHeatmapEnabled} orphanHighlightEnabled={graphViewState.orphanHighlightEnabled} nodeScale={currentSettings.nodeScale} textShadowEnabled={currentSettings.textShadowEnabled} heatmapMediumThreshold={currentSettings.heatmapMediumThreshold} heatmapHighThreshold={currentSettings.heatmapHighThreshold} heatmapBaselineModel={currentSettings.heatmapBaselineModel} onLayoutChange={(graphLayoutAlgorithm: GraphLayoutAlgorithm) => updateGraphViewState({ graphLayoutAlgorithm })} onTokenHeatmapChange={tokenHeatmapEnabled => updateGraphViewState({ tokenHeatmapEnabled })} onOrphanHighlightChange={orphanHighlightEnabled => updateGraphViewState({ orphanHighlightEnabled })} onSelectNode={selectNode} />
 		<EditorPanel node={selectedNode} agentOptions={editableAgentNames} availableTools={activeGraph?.availableTools || []} availableModels={activeGraph?.availableModels || []} {toolPresets} onOpenNode={uri => postWebviewMessage({ type: 'node:open', uri })} onOpenMcp={() => postWebviewMessage({ type: 'mcp:open' })} onSaveNode={message => {
 			graphStatus = 'Saving ' + (selectedNode?.label || 'node') + '...';
 			pendingSaveScrollState = captureScrollState();
 			postWebviewMessage(message);
 		}} />
 	</div>
-	<AboutDialog open={aboutOpen} onClose={() => aboutOpen = false} />
 	<SettingsDialog open={settingsOpen} {initialData} settings={currentSettings} availableModels={activeGraph?.availableModels || []} onClose={() => settingsOpen = false} onUpdate={updateVisualizerSettings} />
 	<NewCustomizationDialog open={newOpen} onClose={() => newOpen = false} onCreate={message => {
 		graphStatus = message.kind === 'mcp' ? 'Opening MCP servers...' : 'Creating customization...';

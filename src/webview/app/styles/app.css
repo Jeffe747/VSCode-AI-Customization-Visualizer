@@ -55,6 +55,12 @@ button:hover {
 	background: color-mix(in srgb, var(--vscode-sideBar-background) 94%, var(--vscode-sideBar-foreground));
 }
 
+.icon-button svg {
+	width: 17px;
+	height: 17px;
+	fill: currentColor;
+}
+
 .window-mode-button {
 	display: inline-flex;
 	align-items: center;
@@ -230,6 +236,11 @@ button:hover {
 	stroke-linejoin: round;
 	stroke-width: 2px;
 	pointer-events: none;
+}
+
+.text-shadow-disabled .node text {
+	paint-order: normal;
+	stroke: none;
 }
 
 .node .model-label,
@@ -774,14 +785,19 @@ button:hover {
 .dialog {
 	display: grid;
 	gap: 12px;
-	width: min(720px, 100%);
-	max-height: min(760px, 90vh);
+	width: min(720px, calc(100vw - 32px));
+	max-height: calc(100vh - 32px);
 	overflow: auto;
 	border: 1px solid color-mix(in srgb, var(--vscode-sideBar-foreground) 18%, transparent);
 	border-radius: 6px;
 	padding: 14px;
 	color: var(--vscode-sideBar-foreground);
 	background: var(--vscode-sideBar-background);
+}
+
+.settings-dialog {
+	width: min(980px, calc(100vw - 32px));
+	max-height: calc(100vh - 24px);
 }
 
 .dialog h3,
@@ -804,7 +820,7 @@ button:hover {
 
 .color-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
 	gap: 8px;
 }
 

@@ -141,6 +141,7 @@ export class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		return {
 			...modeSettings,
 			colors: hasVisualizerColors(sharedSettings.colors) ? sharedSettings.colors : modeSettings.colors,
+			textShadowEnabled: sharedSettings.textShadowEnabled,
 			heatmapToggleVisible: sharedSettings.heatmapToggleVisible,
 			orphanToggleVisible: modeSettings.orphanToggleVisible,
 			heatmapMediumThreshold: sharedSettings.heatmapMediumThreshold,
@@ -166,6 +167,7 @@ export class AgentVisualizerViewProvider implements vscode.WebviewViewProvider {
 		const sharedSettings: VisualizerSettings = {
 			...existingSharedSettings,
 			colors: settings.colors,
+			textShadowEnabled: settings.textShadowEnabled,
 			heatmapToggleVisible: settings.heatmapToggleVisible,
 			heatmapMediumThreshold: settings.heatmapMediumThreshold,
 			heatmapHighThreshold: settings.heatmapHighThreshold,
